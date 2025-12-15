@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "803629546746",
+    "project_id": "costify-1642a",
+    "storage_bucket": "costify-1642a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:803629546746:android:13f68fd18df997f6355d43",
+        "android_client_info": {
+          "package_name": "com.costify.costify"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "803629546746-4na91ltgt7ive5tg7t0b4nqfttfqtr0p.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.costify.costify",
+            "certificate_hash": "5c42472451790949ab501c7a2461c348f9aa270d"
+          }
+        },
+        {
+          "client_id": "803629546746-u66mgbni521liltc3djn6rvei0e5eogi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDCZgErxdz0Mz6t-CQqWLEeT9VftaO3kW4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "803629546746-u66mgbni521liltc3djn6rvei0e5eogi.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "803629546746-iknfd0b9rlp06ag4fquvvrfacg85q7am.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.costify.costify"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

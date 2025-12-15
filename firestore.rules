@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user owns the document
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // Helper function to get project data
+    function getProject(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data;
+    }
+    
+    // Helper function to check if user is project admin
+    function isProjectAdmin(projectId) {
+      return isAuthenticated() && getProject(projectId).adminId == request.auth.uid;
+    }
+    
+    // ============ USERS COLLECTION ============
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if isAuthenticated();
+      
+      // Users can only write their own profile
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+    
+    // ============ PROJECTS COLLECTION ============
+    match /projects/{projectId} {
+      // Allow read if user is admin or their ID is in projectIds of the user doc
+      allow read: if isAuthenticated();
+      
+      // Any authenticated user can create a project (they become admin)
+      allow create: if isAuthenticated() && 
+        request.resource.data.adminId == request.auth.uid;
+      
+      // Only admin can update project
+      allow update: if isAuthenticated() && 
+        resource.data.adminId == request.auth.uid;
+      
+      // Only admin can delete project
+      allow delete: if isAuthenticated() && 
+        resource.data.adminId == request.auth.uid;
+    }
+    
+    // ============ EXPENSES COLLECTION ============
+    match /expenses/{expenseId} {
+      // Anyone authenticated can read expenses
+      allow read: if isAuthenticated();
+      
+      // Authenticated users can create expenses
+      allow create: if isAuthenticated() && 
+        request.resource.data.createdBy == request.auth.uid;
+      
+      // Creator can update pending expenses, admin can update any
+      allow update: if isAuthenticated() && (
+        // Creator can edit their own pending expenses
+        (resource.data.createdBy == request.auth.uid && 
+         resource.data.status == 'pending') ||
+        // Admin can approve/reject - check project admin
+        getProject(resource.data.projectId).adminId == request.auth.uid
+      );
+      
+      // Creator can delete pending expenses, admin can delete any
+      allow delete: if isAuthenticated() && (
+        (resource.data.createdBy == request.auth.uid && 
+         resource.data.status == 'pending') ||
+        getProject(resource.data.projectId).adminId == request.auth.uid
+      );
+    }
+    
+    // ============ INVITATIONS COLLECTION ============
+    match /invitations/{invitationId} {
+      // Anyone authenticated can read invitations
+      allow read: if isAuthenticated();
+      
+      // Authenticated users can create invitations
+      allow create: if isAuthenticated();
+      
+      // Anyone authenticated can accept (update) an invitation
+      allow update: if isAuthenticated();
+      
+      // Creator can delete invitations
+      allow delete: if isAuthenticated() && 
+        resource.data.invitedBy == request.auth.uid;
+    }
+    
+    // ============ NOTIFICATIONS COLLECTION ============
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      
+      // System creates notifications
+      allow create: if isAuthenticated();
+      
+      // Users can mark their notifications as read
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      
+      // Users can delete their own notifications
+      allow delete: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+    }
+  }
+}
