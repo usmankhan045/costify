@@ -39,11 +39,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       appBar: AppBar(
         title: const Text(AppStrings.myProjects),
         actions: [
-          if (authState.isAdmin)
-            IconButton(
-              icon: const Icon(Icons.add),
-              onPressed: () => context.go('${AppRoutes.projects}/create'),
-            ),
+          // Join project via invitation ID
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: 'Join with Invitation ID',
+            onPressed: () => _showJoinProjectDialog(context, ref),
+          ),
+          // Any authenticated user can create projects
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => context.go('${AppRoutes.projects}/create'),
+          ),
         ],
       ),
       body: Column(
@@ -79,17 +85,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                     ),
                     itemCount: filteredProjects.length,
                     itemBuilder: (context, index) {
+                      final userId = authState.user?.id ?? '';
                       return _buildProjectCard(
                         context,
                         filteredProjects[index],
+                        userId: userId,
                       );
                     },
                   ),
                 );
               },
-              loading: () => const Center(
-                child: CircularProgressIndicator(),
-              ),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (error, _) => Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -117,13 +123,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
           ),
         ],
       ),
-      floatingActionButton: authState.isAdmin
-          ? FloatingActionButton.extended(
-              onPressed: () => context.go('${AppRoutes.projects}/create'),
-              icon: const Icon(Icons.add),
-              label: const Text('New Project'),
-            )
-          : null,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => context.go('${AppRoutes.projects}/create'),
+        icon: const Icon(Icons.add),
+        label: const Text('New Project'),
+      ),
     );
   }
 
@@ -158,31 +162,33 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
             ),
             const SizedBox(height: AppTheme.spaceSm),
             Text(
-              isAdmin
-                  ? AppStrings.createFirstProject
-                  : 'You haven\'t joined any projects yet.',
+              AppStrings.createFirstProject,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               textAlign: TextAlign.center,
             ),
-            if (isAdmin) ...[
-              const SizedBox(height: AppTheme.spaceLg),
-              PrimaryButton(
-                text: AppStrings.createProject,
-                width: 200,
-                onPressed: () => context.go('${AppRoutes.projects}/create'),
-              ),
-            ],
+            const SizedBox(height: AppTheme.spaceLg),
+            PrimaryButton(
+              text: AppStrings.createProject,
+              width: 200,
+              onPressed: () => context.go('${AppRoutes.projects}/create'),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProjectCard(BuildContext context, ProjectModel project) {
+  Widget _buildProjectCard(
+    BuildContext context,
+    ProjectModel project, {
+    required String userId,
+  }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final canSeeDetails = project.canUserSeeDetails(userId);
+    final isLabour = project.isUserLabour(userId);
     final progress = project.budget > 0
         ? (project.totalSpent / project.budget).clamp(0.0, 1.0)
         : 0.0;
@@ -217,10 +223,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                       color: Colors.white.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     ),
-                    child: const Icon(
-                      Icons.construction,
-                      color: Colors.white,
-                    ),
+                    child: const Icon(Icons.construction, color: Colors.white),
                   ),
                   const SizedBox(width: AppTheme.spaceMd),
                   Expanded(
@@ -256,79 +259,122 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
               padding: const EdgeInsets.all(AppTheme.spaceMd),
               child: Column(
                 children: [
-                  // Budget info
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildInfoItem(
-                          context,
-                          icon: Icons.account_balance_wallet,
-                          label: 'Budget',
-                          value: Formatters.formatCompactCurrency(project.budget),
-                        ),
-                      ),
-                      Expanded(
-                        child: _buildInfoItem(
-                          context,
-                          icon: Icons.payments,
-                          label: 'Spent',
-                          value: Formatters.formatCompactCurrency(project.totalSpent),
-                          valueColor: progress > 0.8 ? AppColors.error : null,
-                        ),
-                      ),
-                      Expanded(
-                        child: _buildInfoItem(
-                          context,
-                          icon: Icons.savings,
-                          label: 'Remaining',
-                          value: Formatters.formatCompactCurrency(
-                            project.remainingBudget,
-                          ),
-                          valueColor: project.isOverBudget ? AppColors.error : AppColors.success,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTheme.spaceMd),
-                  // Progress bar
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Budget Usage',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                  // Budget info (hidden from labour)
+                  if (canSeeDetails) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildInfoItem(
+                            context,
+                            icon: Icons.account_balance_wallet,
+                            label: 'Budget',
+                            value: Formatters.formatCompactCurrency(
+                              project.budget,
                             ),
                           ),
-                          Text(
-                            '${(progress * 100).toStringAsFixed(1)}%',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: progress > 0.8
+                        ),
+                        Expanded(
+                          child: _buildInfoItem(
+                            context,
+                            icon: Icons.payments,
+                            label: 'Spent',
+                            value: Formatters.formatCompactCurrency(
+                              project.totalSpent,
+                            ),
+                            valueColor: progress > 0.8 ? AppColors.error : null,
+                          ),
+                        ),
+                        Expanded(
+                          child: _buildInfoItem(
+                            context,
+                            icon: Icons.savings,
+                            label: 'Remaining',
+                            value: Formatters.formatCompactCurrency(
+                              project.remainingBudget,
+                            ),
+                            valueColor: project.isOverBudget
+                                ? AppColors.error
+                                : AppColors.success,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppTheme.spaceMd),
+                    // Progress bar
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Budget Usage',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            Text(
+                              '${(progress * 100).toStringAsFixed(1)}%',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: progress > 0.8
+                                    ? AppColors.error
+                                    : theme.colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppTheme.spaceXs),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(
+                            AppTheme.radiusXs,
+                          ),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 8,
+                            backgroundColor: theme.colorScheme.outlineVariant,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              progress > 0.8
                                   ? AppColors.error
-                                  : theme.colorScheme.primary,
+                                  : AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppTheme.spaceMd),
+                  ] else if (isLabour) ...[
+                    // Labour users see a simple message instead of budget info
+                    Container(
+                      padding: const EdgeInsets.all(AppTheme.spaceMd),
+                      decoration: BoxDecoration(
+                        color: AppColors.info.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                        border: Border.all(
+                          color: AppColors.info.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.info_outline,
+                            color: AppColors.info,
+                            size: 20,
+                          ),
+                          const SizedBox(width: AppTheme.spaceSm),
+                          Expanded(
+                            child: Text(
+                              'You can add expenses for this project',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.info,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: AppTheme.spaceXs),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(AppTheme.radiusXs),
-                        child: LinearProgressIndicator(
-                          value: progress,
-                          minHeight: 8,
-                          backgroundColor: theme.colorScheme.outlineVariant,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            progress > 0.8 ? AppColors.error : AppColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTheme.spaceMd),
+                    ),
+                    const SizedBox(height: AppTheme.spaceMd),
+                  ],
                   // Footer
                   Row(
                     children: [
@@ -426,11 +472,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
 
     return Column(
       children: [
-        Icon(
-          icon,
-          size: 20,
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
+        Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
         const SizedBox(height: 4),
         Text(
           value,
@@ -448,5 +490,88 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       ],
     );
   }
-}
 
+  void _showJoinProjectDialog(BuildContext context, WidgetRef ref) {
+    final invitationIdController = TextEditingController();
+    final theme = Theme.of(context);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.link, color: AppColors.primary),
+            SizedBox(width: AppTheme.spaceSm),
+            Text('Join Project'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Enter the invitation ID you received:',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: AppTheme.spaceMd),
+            CustomTextField(
+              controller: invitationIdController,
+              hint: 'Invitation ID',
+              prefixIcon: const Icon(Icons.tag),
+              textCapitalization: TextCapitalization.none,
+              autofocus: true,
+            ),
+            const SizedBox(height: AppTheme.spaceSm),
+            Container(
+              padding: const EdgeInsets.all(AppTheme.spaceSm),
+              decoration: BoxDecoration(
+                color: AppColors.info.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: AppColors.info),
+                  const SizedBox(width: AppTheme.spaceSm),
+                  Expanded(
+                    child: Text(
+                      'You can find the invitation ID in the invitation link you received.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.info,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          PrimaryButton(
+            text: 'Join',
+            onPressed: () {
+              final invitationId = invitationIdController.text.trim();
+              if (invitationId.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter an invitation ID'),
+                    backgroundColor: AppColors.warning,
+                  ),
+                );
+                return;
+              }
+              Navigator.of(context).pop();
+              // Navigate to invitation acceptance screen
+              context.go('/invite/$invitationId');
+            },
+            width: 100,
+          ),
+        ],
+      ),
+    );
+  }
+}

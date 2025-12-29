@@ -72,6 +72,35 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _init() async {
+    // Check current user immediately
+    final currentUser = _authRepository.currentUser;
+    if (currentUser != null) {
+      try {
+        final userModel = await _authRepository.getUserById(currentUser.uid);
+        if (userModel != null) {
+          await _storageService.saveUserSession(
+            userId: userModel.id,
+            email: userModel.email,
+            role: userModel.role,
+          );
+          state = AuthState(
+            status: AuthStatus.authenticated,
+            user: userModel,
+          );
+        } else {
+          state = const AuthState(status: AuthStatus.unauthenticated);
+        }
+      } catch (e) {
+        state = AuthState(
+          status: AuthStatus.error,
+          errorMessage: e.toString(),
+        );
+      }
+    } else {
+      state = const AuthState(status: AuthStatus.unauthenticated);
+    }
+    
+    // Listen for future auth state changes
     _authRepository.authStateChanges.listen((user) async {
       if (user == null) {
         state = const AuthState(status: AuthStatus.unauthenticated);
@@ -197,7 +226,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   /// Sign in with Google
   Future<bool> signInWithGoogle() async {
-    state = state.copyWith(status: AuthStatus.loading);
+    state = state.copyWith(
+      status: AuthStatus.loading,
+      errorMessage: null,
+    );
 
     try {
       final user = await _authRepository.signInWithGoogle();
@@ -208,6 +240,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           status: AuthStatus.unauthenticated,
           user: user,
           requires2FA: true,
+          errorMessage: null,
         );
         return false; // Requires 2FA verification
       }
@@ -221,16 +254,29 @@ class AuthNotifier extends StateNotifier<AuthState> {
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
+        errorMessage: null,
       );
 
       return true;
     } on AuthException catch (e) {
+      // Handle cancelled sign-in gracefully
+      if (e.code == 'google-sign-in-cancelled') {
+        state = state.copyWith(
+          status: AuthStatus.unauthenticated,
+          errorMessage: null, // Don't set error message for cancellation
+        );
+        return false;
+      }
+      
       state = state.copyWith(
         status: AuthStatus.error,
         errorMessage: e.message,
       );
       return false;
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('🔴 [Auth Provider] Unexpected error in signInWithGoogle: $e');
+      print('🔴 [Auth Provider] Error type: ${e.runtimeType}');
+      print('🔴 [Auth Provider] Stack trace: $stackTrace');
       state = state.copyWith(
         status: AuthStatus.error,
         errorMessage: 'An error occurred. Please try again.',

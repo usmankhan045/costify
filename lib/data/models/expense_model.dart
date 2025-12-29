@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../core/constants/app_constants.dart';
 
+// Export PaymentStatus for convenience
+export '../../core/constants/app_constants.dart' show PaymentStatus;
+
 /// Expense model representing project expenses
 class ExpenseModel {
   final String id;
@@ -10,7 +13,9 @@ class ExpenseModel {
   final double amount;
   final String category;
   final String paymentMethod;
-  final String status; // 'pending', 'approved', 'rejected'
+  final String status; // 'pending', 'approved', 'rejected' (approval status)
+  final String paymentStatus; // 'paid', 'credit', 'partial' (payment status)
+  final double paidAmount; // Amount paid so far
   final String? receiptUrl;
   final String createdBy; // User ID
   final String createdByName;
@@ -21,6 +26,11 @@ class ExpenseModel {
   final DateTime expenseDate;
   final DateTime createdAt;
   final DateTime updatedAt;
+  // Soft delete fields
+  final bool isDeleted;
+  final String? deletedBy;
+  final String? deletedByName;
+  final DateTime? deletedAt;
 
   const ExpenseModel({
     required this.id,
@@ -31,6 +41,8 @@ class ExpenseModel {
     required this.category,
     required this.paymentMethod,
     this.status = ExpenseStatus.pending,
+    this.paymentStatus = PaymentStatus.paid,
+    this.paidAmount = 0,
     this.receiptUrl,
     required this.createdBy,
     required this.createdByName,
@@ -41,6 +53,10 @@ class ExpenseModel {
     required this.expenseDate,
     required this.createdAt,
     required this.updatedAt,
+    this.isDeleted = false,
+    this.deletedBy,
+    this.deletedByName,
+    this.deletedAt,
   });
 
   /// Check if expense is pending
@@ -55,18 +71,36 @@ class ExpenseModel {
   /// Check if expense has receipt
   bool get hasReceipt => receiptUrl != null && receiptUrl!.isNotEmpty;
 
+  /// Get pending/remaining amount
+  double get pendingAmount => amount - paidAmount;
+
+  /// Check if fully paid
+  bool get isFullyPaid => paymentStatus == PaymentStatus.paid || paidAmount >= amount;
+
+  /// Check if credit (payment pending)
+  bool get isCredit => paymentStatus == PaymentStatus.credit;
+
+  /// Check if partial payment
+  bool get isPartialPayment => paymentStatus == PaymentStatus.partial;
+
   /// Create ExpenseModel from Firestore document
   factory ExpenseModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    final amount = (data['amount'] ?? 0).toDouble();
+    final paymentStatus = data['paymentStatus'] ?? PaymentStatus.paid;
+    final paidAmount = (data['paidAmount'] ?? (paymentStatus == PaymentStatus.paid ? amount : 0)).toDouble();
+    
     return ExpenseModel(
       id: doc.id,
       projectId: data['projectId'] ?? '',
       title: data['title'] ?? '',
       description: data['description'],
-      amount: (data['amount'] ?? 0).toDouble(),
+      amount: amount,
       category: data['category'] ?? ExpenseCategories.miscellaneous,
       paymentMethod: data['paymentMethod'] ?? PaymentMethods.cash,
       status: data['status'] ?? ExpenseStatus.pending,
+      paymentStatus: paymentStatus,
+      paidAmount: paidAmount,
       receiptUrl: data['receiptUrl'],
       createdBy: data['createdBy'] ?? '',
       createdByName: data['createdByName'] ?? '',
@@ -78,20 +112,30 @@ class ExpenseModel {
           (data['expenseDate'] as Timestamp?)?.toDate() ?? DateTime.now(),
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      isDeleted: data['isDeleted'] ?? false,
+      deletedBy: data['deletedBy'],
+      deletedByName: data['deletedByName'],
+      deletedAt: (data['deletedAt'] as Timestamp?)?.toDate(),
     );
   }
 
   /// Create ExpenseModel from Map
   factory ExpenseModel.fromMap(Map<String, dynamic> map, String id) {
+    final amount = (map['amount'] ?? 0).toDouble();
+    final paymentStatus = map['paymentStatus'] ?? PaymentStatus.paid;
+    final paidAmount = (map['paidAmount'] ?? (paymentStatus == PaymentStatus.paid ? amount : 0)).toDouble();
+    
     return ExpenseModel(
       id: id,
       projectId: map['projectId'] ?? '',
       title: map['title'] ?? '',
       description: map['description'],
-      amount: (map['amount'] ?? 0).toDouble(),
+      amount: amount,
       category: map['category'] ?? ExpenseCategories.miscellaneous,
       paymentMethod: map['paymentMethod'] ?? PaymentMethods.cash,
       status: map['status'] ?? ExpenseStatus.pending,
+      paymentStatus: paymentStatus,
+      paidAmount: paidAmount,
       receiptUrl: map['receiptUrl'],
       createdBy: map['createdBy'] ?? '',
       createdByName: map['createdByName'] ?? '',
@@ -110,6 +154,12 @@ class ExpenseModel {
       updatedAt: map['updatedAt'] is Timestamp
           ? (map['updatedAt'] as Timestamp).toDate()
           : DateTime.tryParse(map['updatedAt'] ?? '') ?? DateTime.now(),
+      isDeleted: map['isDeleted'] ?? false,
+      deletedBy: map['deletedBy'],
+      deletedByName: map['deletedByName'],
+      deletedAt: map['deletedAt'] is Timestamp
+          ? (map['deletedAt'] as Timestamp).toDate()
+          : DateTime.tryParse(map['deletedAt'] ?? ''),
     );
   }
 
@@ -123,6 +173,8 @@ class ExpenseModel {
       'category': category,
       'paymentMethod': paymentMethod,
       'status': status,
+      'paymentStatus': paymentStatus,
+      'paidAmount': paidAmount,
       'receiptUrl': receiptUrl,
       'createdBy': createdBy,
       'createdByName': createdByName,
@@ -133,6 +185,10 @@ class ExpenseModel {
       'expenseDate': Timestamp.fromDate(expenseDate),
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
+      'isDeleted': isDeleted,
+      'deletedBy': deletedBy,
+      'deletedByName': deletedByName,
+      'deletedAt': deletedAt != null ? Timestamp.fromDate(deletedAt!) : null,
     };
   }
 
@@ -146,6 +202,8 @@ class ExpenseModel {
     String? category,
     String? paymentMethod,
     String? status,
+    String? paymentStatus,
+    double? paidAmount,
     String? receiptUrl,
     String? createdBy,
     String? createdByName,
@@ -156,6 +214,10 @@ class ExpenseModel {
     DateTime? expenseDate,
     DateTime? createdAt,
     DateTime? updatedAt,
+    bool? isDeleted,
+    String? deletedBy,
+    String? deletedByName,
+    DateTime? deletedAt,
   }) {
     return ExpenseModel(
       id: id ?? this.id,
@@ -166,6 +228,8 @@ class ExpenseModel {
       category: category ?? this.category,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       status: status ?? this.status,
+      paymentStatus: paymentStatus ?? this.paymentStatus,
+      paidAmount: paidAmount ?? this.paidAmount,
       receiptUrl: receiptUrl ?? this.receiptUrl,
       createdBy: createdBy ?? this.createdBy,
       createdByName: createdByName ?? this.createdByName,
@@ -176,6 +240,10 @@ class ExpenseModel {
       expenseDate: expenseDate ?? this.expenseDate,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      isDeleted: isDeleted ?? this.isDeleted,
+      deletedBy: deletedBy ?? this.deletedBy,
+      deletedByName: deletedByName ?? this.deletedByName,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 

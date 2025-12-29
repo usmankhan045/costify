@@ -25,6 +25,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
   bool _agreedToTerms = false;
 
   @override
@@ -77,6 +78,58 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(error),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleGoogleSignUp() async {
+    if (!mounted) return;
+    setState(() => _isGoogleLoading = true);
+
+    try {
+      final success = await ref
+          .read(authNotifierProvider.notifier)
+          .signInWithGoogle();
+
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Account created successfully!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        context.go(AppRoutes.dashboard);
+      } else {
+        final authState = ref.read(authNotifierProvider);
+        if (authState.requires2FA) {
+          context.go(AppRoutes.verify2FA);
+        } else if (authState.errorMessage != null) {
+          // Don't show error for cancelled sign-in
+          final errorMessage = authState.errorMessage!;
+          if (!errorMessage.contains('cancelled') && !errorMessage.contains('canceled')) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(authState.errorMessage!),
+                backgroundColor: AppColors.error,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
+      final errorMessage = e.toString();
+      if (!errorMessage.contains('cancelled') && !errorMessage.contains('canceled')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to sign up with Google. Please try again.'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -232,6 +285,31 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     onPressed: _handleRegister,
                     isLoading: _isLoading,
                     isEnabled: _agreedToTerms,
+                  ),
+                  const SizedBox(height: AppTheme.spaceLg),
+                  // Divider
+                  Row(
+                    children: [
+                      const Expanded(child: Divider()),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppTheme.spaceMd,
+                        ),
+                        child: Text(
+                          AppStrings.orContinueWith,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      const Expanded(child: Divider()),
+                    ],
+                  ),
+                  const SizedBox(height: AppTheme.spaceLg),
+                  // Google sign up
+                  GoogleSignInButton(
+                    onPressed: _handleGoogleSignUp,
+                    isLoading: _isGoogleLoading,
                   ),
                   const SizedBox(height: AppTheme.spaceLg),
                   // Sign in link

@@ -36,7 +36,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     setState(() => _isLoading = true);
 
-    final success = await ref.read(authNotifierProvider.notifier).signInWithEmail(
+    final success = await ref
+        .read(authNotifierProvider.notifier)
+        .signInWithEmail(
           email: _emailController.text.trim(),
           password: _passwordController.text,
         );
@@ -49,32 +51,55 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final error = ref.read(authNotifierProvider).errorMessage;
       if (error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error),
-            backgroundColor: AppColors.error,
-          ),
+          SnackBar(content: Text(error), backgroundColor: AppColors.error),
         );
       }
     }
   }
 
   Future<void> _handleGoogleLogin() async {
+    if (!mounted) return;
     setState(() => _isGoogleLoading = true);
 
-    final success = await ref.read(authNotifierProvider.notifier).signInWithGoogle();
+    try {
+      final success = await ref
+          .read(authNotifierProvider.notifier)
+          .signInWithGoogle();
 
-    setState(() => _isGoogleLoading = false);
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
 
-    if (success && mounted) {
-      context.go(AppRoutes.dashboard);
-    } else if (mounted) {
-      final authState = ref.read(authNotifierProvider);
-      if (authState.requires2FA) {
-        context.go(AppRoutes.verify2FA);
-      } else if (authState.errorMessage != null) {
+      if (success) {
+        context.go(AppRoutes.dashboard);
+      } else {
+        final authState = ref.read(authNotifierProvider);
+        if (authState.requires2FA) {
+          context.go(AppRoutes.verify2FA);
+        } else if (authState.errorMessage != null) {
+          // Don't show error for cancelled sign-in
+          final errorCode = authState.errorMessage;
+          if (errorCode != 'Google sign in was cancelled') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(authState.errorMessage!),
+                backgroundColor: AppColors.error,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e, stackTrace) {
+      print('🔴 [Login Screen] Error in _handleGoogleLogin: $e');
+      print('🔴 [Login Screen] Error type: ${e.runtimeType}');
+      print('🔴 [Login Screen] Stack trace: $stackTrace');
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
+      // Only show error if it's not a cancellation
+      final errorMessage = e.toString();
+      if (!errorMessage.contains('cancelled') && !errorMessage.contains('canceled')) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(authState.errorMessage!),
+            content: Text('Failed to sign in with Google. Please try again.'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -103,25 +128,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     child: Column(
                       children: [
                         Container(
-                          width: 80,
-                          height: 80,
+                          width: 100,
+                          height: 100,
                           decoration: BoxDecoration(
-                            gradient: AppColors.primaryGradient,
-                            borderRadius: BorderRadius.circular(20),
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(24),
                             boxShadow: AppColors.mediumShadow,
                           ),
-                          child: const Icon(
-                            Icons.account_balance_wallet_rounded,
-                            size: 40,
-                            color: Colors.white,
+                          padding: const EdgeInsets.all(12),
+                          child: Image.asset(
+                            'assets/images/splash_logo.png',
+                            fit: BoxFit.contain,
                           ),
                         ),
                         const SizedBox(height: AppTheme.spaceMd),
                         Text(
-                          'Costify',
+                          'COSTIFY',
                           style: theme.textTheme.headlineMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF1A365D),
+                            letterSpacing: 3,
                           ),
                         ),
                       ],
@@ -222,4 +248,3 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 }
-

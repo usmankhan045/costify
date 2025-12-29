@@ -116,9 +116,8 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 return _ExpensesList(projectId: projectId);
               },
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => Center(
-                child: Text(AppStrings.somethingWentWrong),
-              ),
+              error: (_, __) =>
+                  Center(child: Text(AppStrings.somethingWentWrong)),
             ),
           ),
         ],
@@ -156,10 +155,11 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             label: 'Pending',
             isSelected: statusFilter == ExpenseStatus.pending,
             onTap: () {
-              ref.read(expenseStatusFilterProvider.notifier).state =
-                  statusFilter == ExpenseStatus.pending
-                      ? null
-                      : ExpenseStatus.pending;
+              ref
+                  .read(expenseStatusFilterProvider.notifier)
+                  .state = statusFilter == ExpenseStatus.pending
+                  ? null
+                  : ExpenseStatus.pending;
             },
           ),
           _buildFilterChip(
@@ -167,10 +167,11 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             label: 'Approved',
             isSelected: statusFilter == ExpenseStatus.approved,
             onTap: () {
-              ref.read(expenseStatusFilterProvider.notifier).state =
-                  statusFilter == ExpenseStatus.approved
-                      ? null
-                      : ExpenseStatus.approved;
+              ref
+                  .read(expenseStatusFilterProvider.notifier)
+                  .state = statusFilter == ExpenseStatus.approved
+                  ? null
+                  : ExpenseStatus.approved;
             },
           ),
           _buildFilterChip(
@@ -178,10 +179,11 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             label: 'Rejected',
             isSelected: statusFilter == ExpenseStatus.rejected,
             onTap: () {
-              ref.read(expenseStatusFilterProvider.notifier).state =
-                  statusFilter == ExpenseStatus.rejected
-                      ? null
-                      : ExpenseStatus.rejected;
+              ref
+                  .read(expenseStatusFilterProvider.notifier)
+                  .state = statusFilter == ExpenseStatus.rejected
+                  ? null
+                  : ExpenseStatus.rejected;
             },
           ),
           // Category filter indicator
@@ -215,10 +217,24 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         label: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected
+                    ? theme.colorScheme.onPrimaryContainer
+                    : theme.colorScheme.onSurface,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
             if (showClose) ...[
               const SizedBox(width: 4),
-              const Icon(Icons.close, size: 16),
+              Icon(
+                Icons.close,
+                size: 16,
+                color: isSelected
+                    ? theme.colorScheme.onPrimaryContainer
+                    : theme.colorScheme.onSurface,
+              ),
             ],
           ],
         ),
@@ -226,6 +242,12 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         onSelected: (_) => onTap(),
         selectedColor: theme.colorScheme.primaryContainer,
         checkmarkColor: theme.colorScheme.primary,
+        labelStyle: TextStyle(
+          color: isSelected
+              ? theme.colorScheme.onPrimaryContainer
+              : theme.colorScheme.onSurface,
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        ),
       ),
     );
   }
@@ -392,28 +414,35 @@ class _ExpenseCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: categoryColor.withValues(alpha: 0.1),
-                          borderRadius:
-                              BorderRadius.circular(AppTheme.radiusXs),
-                        ),
-                        child: Text(
-                          expense.category,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: categoryColor,
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: categoryColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(
+                              AppTheme.radiusXs,
+                            ),
+                          ),
+                          child: Text(
+                            expense.category,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: categoryColor,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        Formatters.formatDate(expense.expenseDate),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                      Flexible(
+                        child: Text(
+                          Formatters.formatDate(expense.expenseDate),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
@@ -465,10 +494,7 @@ class _ExpenseCard extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 8,
-        vertical: 4,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
@@ -586,4 +612,3 @@ class _FilterBottomSheetState extends State<_FilterBottomSheet> {
     );
   }
 }
-

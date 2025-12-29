@@ -78,6 +78,7 @@ class AppColors {
   static const Color utilities = Color(0xFFDAA520);
   static const Color permits = Color(0xFF800080);
   static const Color contractors = Color(0xFFDC143C);
+  static const Color food = Color(0xFFFF6347); // Tomato red for food
   static const Color miscellaneous = Color(0xFF20B2AA);
 
   // Gradients
@@ -148,6 +149,8 @@ class AppColors {
         return permits;
       case 'contractors':
         return contractors;
+      case 'food':
+        return food;
       default:
         return miscellaneous;
     }

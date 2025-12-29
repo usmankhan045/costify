@@ -9,6 +9,7 @@ import '../data/models/expense_model.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/project_repository.dart';
 import '../data/repositories/expense_repository.dart';
+import 'auth_provider.dart';
 
 // ============ Core Services ============
 
@@ -51,16 +52,12 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
 /// Project repository provider
 final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
-  return ProjectRepository(
-    firestore: ref.watch(firestoreProvider),
-  );
+  return ProjectRepository(firestore: ref.watch(firestoreProvider));
 });
 
 /// Expense repository provider
 final expenseRepositoryProvider = Provider<ExpenseRepository>((ref) {
-  return ExpenseRepository(
-    firestore: ref.watch(firestoreProvider),
-  );
+  return ExpenseRepository(firestore: ref.watch(firestoreProvider));
 });
 
 // ============ Auth State Providers ============
@@ -110,8 +107,19 @@ final projectsStreamProvider = StreamProvider<List<ProjectModel>>((ref) {
 });
 
 /// Single project provider
-final projectProvider = FutureProvider.family<ProjectModel?, String>((ref, projectId) async {
+final projectProvider = FutureProvider.family<ProjectModel?, String>((
+  ref,
+  projectId,
+) async {
   return ref.watch(projectRepositoryProvider).getProjectById(projectId);
+});
+
+/// Single project stream provider (for real-time updates)
+final projectStreamProvider = StreamProvider.family<ProjectModel?, String>((
+  ref,
+  projectId,
+) {
+  return ref.watch(projectRepositoryProvider).streamProjectById(projectId);
 });
 
 /// Selected project provider (for navigation)
@@ -121,7 +129,7 @@ final selectedProjectIdProvider = StateProvider<String?>((ref) => null);
 final selectedProjectProvider = Provider<ProjectModel?>((ref) {
   final projectId = ref.watch(selectedProjectIdProvider);
   if (projectId == null) return null;
-  
+
   final projectAsync = ref.watch(projectProvider(projectId));
   return projectAsync.when(
     data: (project) => project,
@@ -133,27 +141,45 @@ final selectedProjectProvider = Provider<ProjectModel?>((ref) {
 // ============ Expense Providers ============
 
 /// Project expenses provider
-final projectExpensesProvider = FutureProvider.family<List<ExpenseModel>, String>((ref, projectId) async {
-  return ref.watch(expenseRepositoryProvider).getExpensesForProject(projectId);
-});
+final projectExpensesProvider =
+    FutureProvider.family<List<ExpenseModel>, String>((ref, projectId) async {
+      try {
+        return await ref
+            .watch(expenseRepositoryProvider)
+            .getExpensesForProject(projectId);
+      } catch (e) {
+        print('Error in projectExpensesProvider: $e');
+        rethrow;
+      }
+    });
 
 /// Project expenses stream provider
-final projectExpensesStreamProvider = StreamProvider.family<List<ExpenseModel>, String>((ref, projectId) {
-  return ref.watch(expenseRepositoryProvider).streamExpensesForProject(projectId);
-});
+final projectExpensesStreamProvider =
+    StreamProvider.family<List<ExpenseModel>, String>((ref, projectId) {
+      return ref
+          .watch(expenseRepositoryProvider)
+          .streamExpensesForProject(projectId);
+    });
 
 /// Pending expenses for project
-final pendingExpensesProvider = FutureProvider.family<List<ExpenseModel>, String>((ref, projectId) async {
-  return ref.watch(expenseRepositoryProvider).getPendingExpenses(projectId);
-});
+final pendingExpensesProvider =
+    FutureProvider.family<List<ExpenseModel>, String>((ref, projectId) async {
+      return ref.watch(expenseRepositoryProvider).getPendingExpenses(projectId);
+    });
 
 /// Expense summary provider
-final expenseSummaryProvider = FutureProvider.family<ExpenseSummary, String>((ref, projectId) async {
+final expenseSummaryProvider = FutureProvider.family<ExpenseSummary, String>((
+  ref,
+  projectId,
+) async {
   return ref.watch(expenseRepositoryProvider).getExpenseSummary(projectId);
 });
 
 /// Single expense provider
-final expenseProvider = FutureProvider.family<ExpenseModel?, String>((ref, expenseId) async {
+final expenseProvider = FutureProvider.family<ExpenseModel?, String>((
+  ref,
+  expenseId,
+) async {
   return ref.watch(expenseRepositoryProvider).getExpenseById(expenseId);
 });
 
@@ -204,7 +230,7 @@ final expenseSearchQueryProvider = StateProvider<String>((ref) => '');
 final filteredProjectsProvider = Provider<List<ProjectModel>>((ref) {
   final query = ref.watch(projectSearchQueryProvider).toLowerCase();
   final projectsAsync = ref.watch(userProjectsProvider);
-  
+
   return projectsAsync.when(
     data: (projects) {
       if (query.isEmpty) return projects;
@@ -218,48 +244,84 @@ final filteredProjectsProvider = Provider<List<ProjectModel>>((ref) {
   );
 });
 
-/// Filtered expenses provider
-final filteredExpensesProvider = Provider.family<List<ExpenseModel>, String>((ref, projectId) {
+/// Filtered expenses provider (with role-based filtering)
+final filteredExpensesProvider = Provider.family<List<ExpenseModel>, String>((
+  ref,
+  projectId,
+) {
   final query = ref.watch(expenseSearchQueryProvider).toLowerCase();
   final statusFilter = ref.watch(expenseStatusFilterProvider);
   final categoryFilter = ref.watch(expenseCategoryFilterProvider);
   final dateRange = ref.watch(dateRangeFilterProvider);
-  
+  final authState = ref.watch(authNotifierProvider);
+  final projectAsync = ref.watch(projectProvider(projectId));
+
   final expensesAsync = ref.watch(projectExpensesProvider(projectId));
-  
-  return expensesAsync.when(
-    data: (expenses) {
-      return expenses.where((expense) {
-        // Search query filter
-        if (query.isNotEmpty) {
-          final matchesQuery = expense.title.toLowerCase().contains(query) ||
-              (expense.description?.toLowerCase().contains(query) ?? false);
-          if (!matchesQuery) return false;
-        }
-        
-        // Status filter
-        if (statusFilter != null && expense.status != statusFilter) {
-          return false;
-        }
-        
-        // Category filter
-        if (categoryFilter != null && expense.category != categoryFilter) {
-          return false;
-        }
-        
-        // Date range filter
-        if (dateRange != null) {
-          if (expense.expenseDate.isBefore(dateRange.start) ||
-              expense.expenseDate.isAfter(dateRange.end)) {
-            return false;
+
+  // Wait for both project and expenses to be ready
+  return projectAsync.when(
+    data: (project) {
+      if (project == null) {
+        return expensesAsync.when(
+          data: (_) => <ExpenseModel>[],
+          loading: () => <ExpenseModel>[],
+          error: (_, __) => <ExpenseModel>[],
+        );
+      }
+
+      return expensesAsync.when(
+        data: (expenses) {
+          // Apply role-based filtering first
+          List<ExpenseModel> roleFilteredExpenses = expenses;
+
+          if (authState.user != null && authState.user!.id.isNotEmpty) {
+            final userId = authState.user!.id;
+            final isLabour = project.isUserLabour(userId);
+
+            // Labour users can only see their own expenses
+            if (isLabour) {
+              roleFilteredExpenses = expenses
+                  .where((e) => e.createdBy == userId)
+                  .toList();
+            }
           }
-        }
-        
-        return true;
-      }).toList();
+
+          // Apply other filters
+          return roleFilteredExpenses.where((expense) {
+            // Search query filter
+            if (query.isNotEmpty) {
+              final matchesQuery =
+                  expense.title.toLowerCase().contains(query) ||
+                  (expense.description?.toLowerCase().contains(query) ?? false);
+              if (!matchesQuery) return false;
+            }
+
+            // Status filter
+            if (statusFilter != null && expense.status != statusFilter) {
+              return false;
+            }
+
+            // Category filter
+            if (categoryFilter != null && expense.category != categoryFilter) {
+              return false;
+            }
+
+            // Date range filter
+            if (dateRange != null) {
+              if (expense.expenseDate.isBefore(dateRange.start) ||
+                  expense.expenseDate.isAfter(dateRange.end)) {
+                return false;
+              }
+            }
+
+            return true;
+          }).toList();
+        },
+        loading: () => <ExpenseModel>[],
+        error: (_, __) => <ExpenseModel>[],
+      );
     },
-    loading: () => [],
-    error: (_, __) => [],
+    loading: () => <ExpenseModel>[],
+    error: (_, __) => <ExpenseModel>[],
   );
 });
-

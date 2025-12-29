@@ -17,7 +17,13 @@ class AuthRepository {
     GoogleSignIn? googleSignIn,
   })  : _auth = auth ?? FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance,
-        _googleSignIn = googleSignIn ?? GoogleSignIn();
+        _googleSignIn = googleSignIn ??
+            GoogleSignIn(
+              scopes: ['email', 'profile'],
+              // Server client ID from google-services.json for Android
+              // This is the OAuth 2.0 client ID (type 3) from google-services.json
+              serverClientId: '803629546746-u66mgbni521liltc3djn6rvei0e5eogi.apps.googleusercontent.com',
+            );
 
   /// Get current Firebase user
   User? get currentUser => _auth.currentUser;
@@ -112,46 +118,216 @@ class AuthRepository {
   /// Sign in with Google
   Future<UserModel> signInWithGoogle() async {
     try {
+      print('🔵 [Google Sign-In] Starting Google sign-in process...');
+      
+      // Check if user is already signed in to Google
+      try {
+        final currentGoogleUser = await _googleSignIn.signInSilently();
+        if (currentGoogleUser != null) {
+          print('🔵 [Google Sign-In] Found existing Google sign-in, signing out first...');
+          await _googleSignIn.signOut();
+          print('🔵 [Google Sign-In] Signed out from previous session');
+        }
+      } catch (e) {
+        print('🔵 [Google Sign-In] No existing Google sign-in found (this is normal)');
+        // Continue anyway - this is expected if user is not signed in
+      }
+      
+      print('🔵 [Google Sign-In] Requesting Google sign-in...');
       final googleUser = await _googleSignIn.signIn();
       if (googleUser == null) {
+        print('🔵 [Google Sign-In] User cancelled the sign-in');
+        // User cancelled the sign-in, throw specific exception
         throw AuthException.googleSignInCancelled();
       }
 
+      print('🔵 [Google Sign-In] Google user obtained: ${googleUser.email}');
+      print('🔵 [Google Sign-In] Getting authentication tokens...');
       final googleAuth = await googleUser.authentication;
+      
+      // Validate that we have the required tokens
+      if (googleAuth.accessToken == null || googleAuth.idToken == null) {
+        print('❌ [Google Sign-In] Missing authentication tokens');
+        throw AuthException.googleSignInFailed();
+      }
+      
+      print('🔵 [Google Sign-In] Tokens obtained successfully');
+
+      print('🔵 [Google Sign-In] Creating Firebase credential...');
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
+      print('🔵 [Google Sign-In] Signing in with Firebase...');
       final userCredential = await _auth.signInWithCredential(credential);
       if (userCredential.user == null) {
+        print('❌ [Google Sign-In] Firebase sign-in returned null user');
         throw AuthException.googleSignInFailed();
       }
 
+      final firebaseUser = userCredential.user!;
+      print('🔵 [Google Sign-In] Firebase user obtained: ${firebaseUser.uid}, email: ${firebaseUser.email}');
+      
+      // Validate required user data
+      if (firebaseUser.email == null || firebaseUser.email!.isEmpty) {
+        print('❌ [Google Sign-In] Firebase user missing email');
+        await _auth.signOut();
+        await _googleSignIn.signOut();
+        throw AuthException.googleSignInFailed();
+      }
+
+      // Reload user to ensure auth token is fresh and available for Firestore
+      print('🔵 [Google Sign-In] Reloading user to ensure auth token is ready...');
+      try {
+        await firebaseUser.reload();
+        print('🔵 [Google Sign-In] User reloaded successfully');
+      } catch (e) {
+        print('⚠️ [Google Sign-In] Warning: Could not reload user: $e');
+        // Continue anyway - this is not critical
+      }
+      
+      // Small delay to ensure auth token propagates to Firestore
+      await Future.delayed(const Duration(milliseconds: 500));
+      print('🔵 [Google Sign-In] Auth token should be ready now');
+
       // Check if user exists in Firestore
-      var userModel = await getUserById(userCredential.user!.uid);
+      print('🔵 [Google Sign-In] Checking if user exists in Firestore...');
+      UserModel? userModel;
+      try {
+        userModel = await getUserById(firebaseUser.uid);
+        if (userModel != null) {
+          print('🔵 [Google Sign-In] Existing user found in Firestore');
+        } else {
+          print('🔵 [Google Sign-In] User not found in Firestore, will create new user');
+        }
+      } on DatabaseException catch (e) {
+        // If there's a database error, log it but continue to create user
+        print('⚠️ [Google Sign-In] Error fetching user from Firestore: ${e.message}');
+        print('🔵 [Google Sign-In] Will attempt to create new user anyway');
+      }
 
       if (userModel == null) {
         // Create new user
+        print('🔵 [Google Sign-In] Creating new user document in Firestore...');
         final now = DateTime.now();
         userModel = UserModel(
-          id: userCredential.user!.uid,
-          email: userCredential.user!.email ?? '',
-          name: userCredential.user!.displayName ?? '',
-          photoUrl: userCredential.user!.photoURL,
+          id: firebaseUser.uid,
+          email: firebaseUser.email!,
+          name: firebaseUser.displayName ?? firebaseUser.email!.split('@')[0],
+          photoUrl: firebaseUser.photoURL,
+          role: UserRoles.stakeholder, // Default role for new users
           isEmailVerified: true, // Google accounts are verified
           createdAt: now,
           updatedAt: now,
         );
 
-        await _usersCollection
-            .doc(userCredential.user!.uid)
-            .set(userModel.toMap());
+        try {
+          // Use set with merge: false to create new document
+          print('🔵 [Google Sign-In] Writing user document to Firestore...');
+          print('🔵 [Google Sign-In] User ID: ${firebaseUser.uid}');
+          print('🔵 [Google Sign-In] Auth UID: ${_auth.currentUser?.uid}');
+          print('🔵 [Google Sign-In] Auth token available: ${_auth.currentUser != null}');
+          
+          // Ensure we're using the current authenticated user
+          final currentUser = _auth.currentUser;
+          if (currentUser == null || currentUser.uid != firebaseUser.uid) {
+            print('❌ [Google Sign-In] Auth user mismatch or null');
+            await _auth.signOut();
+            await _googleSignIn.signOut();
+            throw AuthException.googleSignInFailed();
+          }
+          
+          await _usersCollection
+              .doc(firebaseUser.uid)
+              .set(userModel.toMap(), SetOptions(merge: false));
+          print('✅ [Google Sign-In] User document created successfully');
+        } catch (e) {
+          // If document already exists or other error, try to fetch it
+          print('⚠️ [Google Sign-In] Error creating user document: $e');
+          print('🔵 [Google Sign-In] Attempting to fetch existing user...');
+          try {
+            userModel = await getUserById(firebaseUser.uid);
+            if (userModel == null) {
+              // If still null, the document doesn't exist, try creating again with merge: true
+              print('🔵 [Google Sign-In] User still not found, trying merge: true...');
+              final newUserModel = UserModel(
+                id: firebaseUser.uid,
+                email: firebaseUser.email!,
+                name: firebaseUser.displayName ?? firebaseUser.email!.split('@')[0],
+                photoUrl: firebaseUser.photoURL,
+                role: UserRoles.stakeholder,
+                isEmailVerified: true,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              );
+              await _usersCollection
+                  .doc(firebaseUser.uid)
+                  .set(newUserModel.toMap(), SetOptions(merge: true));
+              userModel = await getUserById(firebaseUser.uid);
+              if (userModel != null) {
+                print('✅ [Google Sign-In] User document created with merge');
+              }
+            } else {
+              print('✅ [Google Sign-In] Found existing user after error');
+            }
+          } catch (fetchError) {
+            print('❌ [Google Sign-In] Error fetching user after creation attempt: $fetchError');
+            print('❌ [Google Sign-In] Stack trace: ${fetchError.toString()}');
+            // If we can't create or fetch, sign out and throw error
+            await _auth.signOut();
+            await _googleSignIn.signOut();
+            throw AuthException.googleSignInFailed();
+          }
+        }
       }
 
+      // Final validation
+      if (userModel == null) {
+        print('❌ [Google Sign-In] User model is null after all attempts');
+        await _auth.signOut();
+        await _googleSignIn.signOut();
+        throw AuthException.googleSignInFailed();
+      }
+
+      print('✅ [Google Sign-In] Successfully signed in user: ${userModel.email}');
       return userModel;
-    } catch (e) {
-      if (e is AuthException) rethrow;
+    } on AuthException catch (e) {
+      // Re-throw AuthExceptions as-is, but log them
+      print('🔴 [Google Sign-In] AuthException: ${e.code} - ${e.message}');
+      if (e.originalError != null) {
+        print('🔴 [Google Sign-In] Original error: ${e.originalError}');
+      }
+      rethrow;
+    } on FirebaseAuthException catch (e) {
+      // Handle Firebase Auth specific errors
+      print('🔴 [Google Sign-In] Firebase Auth error: ${e.code} - ${e.message}');
+      print('🔴 [Google Sign-In] Error details: ${e.toString()}');
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
+      throw _handleFirebaseAuthException(e);
+    } on DatabaseException catch (e) {
+      // Handle Firestore errors
+      print('🔴 [Google Sign-In] Database error: ${e.message}');
+      print('🔴 [Google Sign-In] Error code: ${e.code}');
+      if (e.originalError != null) {
+        print('🔴 [Google Sign-In] Original error: ${e.originalError}');
+      }
+      try {
+        await _auth.signOut();
+        await _googleSignIn.signOut();
+      } catch (_) {}
+      throw AuthException.googleSignInFailed();
+    } catch (e, stackTrace) {
+      // Catch all other errors
+      print('🔴 [Google Sign-In] Unexpected error: $e');
+      print('🔴 [Google Sign-In] Error type: ${e.runtimeType}');
+      print('🔴 [Google Sign-In] Stack trace: $stackTrace');
+      try {
+        await _auth.signOut();
+        await _googleSignIn.signOut();
+      } catch (_) {}
       throw AuthException.googleSignInFailed();
     }
   }

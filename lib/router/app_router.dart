@@ -12,6 +12,8 @@ import '../presentation/screens/projects/projects_screen.dart';
 import '../presentation/screens/projects/project_detail_screen.dart';
 import '../presentation/screens/projects/create_project_screen.dart';
 import '../presentation/screens/projects/invite_stakeholder_screen.dart';
+import '../presentation/screens/projects/project_settings_screen.dart';
+import '../presentation/screens/invitation/accept_invitation_screen.dart';
 import '../presentation/screens/expenses/expenses_screen.dart';
 import '../presentation/screens/expenses/expense_detail_screen.dart';
 import '../presentation/screens/expenses/add_expense_screen.dart';
@@ -19,6 +21,8 @@ import '../presentation/screens/settings/settings_screen.dart';
 import '../presentation/screens/settings/profile_screen.dart';
 import '../presentation/screens/settings/security_screen.dart';
 import '../presentation/screens/help/help_screen.dart';
+import '../presentation/screens/reports/reports_screen.dart';
+import '../presentation/screens/notifications/notifications_screen.dart';
 import '../presentation/common/splash_screen.dart';
 
 /// Route paths
@@ -31,6 +35,9 @@ class AppRoutes {
   static const String register = '/register';
   static const String forgotPassword = '/forgot-password';
   static const String verify2FA = '/verify-2fa';
+
+  // Invitation route
+  static const String acceptInvitation = '/invite/:invitationId';
 
   // Main routes
   static const String dashboard = '/dashboard';
@@ -45,6 +52,8 @@ class AppRoutes {
   static const String profile = '/settings/profile';
   static const String security = '/settings/security';
   static const String help = '/help';
+  static const String reports = '/reports';
+  static const String notifications = '/notifications';
 }
 
 /// Router provider
@@ -67,10 +76,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         AppRoutes.forgotPassword,
         AppRoutes.splash,
       ];
+      
+      // Routes that can be accessed without authentication (invitation links)
+      final isInvitationRoute = currentPath.startsWith('/invite/');
 
       // If requires 2FA verification
       if (requires2FA && currentPath != AppRoutes.verify2FA) {
         return AppRoutes.verify2FA;
+      }
+
+      // Allow invitation routes - they handle auth internally
+      if (isInvitationRoute) {
+        return null;
       }
 
       // If not logged in and trying to access protected route
@@ -113,6 +130,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.verify2FA,
         name: 'verify2FA',
         builder: (context, state) => const Verify2FAScreen(),
+      ),
+
+      // Invitation acceptance route
+      GoRoute(
+        path: '/invite/:invitationId',
+        name: 'acceptInvitation',
+        builder: (context, state) {
+          final invitationId = state.pathParameters['invitationId']!;
+          return AcceptInvitationScreen(invitationId: invitationId);
+        },
       ),
 
       // Main shell with bottom navigation
@@ -158,6 +185,14 @@ final routerProvider = Provider<GoRouter>((ref) {
                       return AddExpenseScreen(projectId: projectId);
                     },
                   ),
+                  GoRoute(
+                    path: 'settings',
+                    name: 'projectSettings',
+                    builder: (context, state) {
+                      final projectId = state.pathParameters['id']!;
+                      return ProjectSettingsScreen(projectId: projectId);
+                    },
+                  ),
                 ],
               ),
             ],
@@ -198,6 +233,24 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: AppRoutes.help,
             name: 'help',
             builder: (context, state) => const HelpScreen(),
+          ),
+          GoRoute(
+            path: AppRoutes.reports,
+            name: 'reports',
+            redirect: (context, state) {
+              final userId = authState.user?.id;
+              if (userId == null) return AppRoutes.login;
+              
+              // Check if user is labour in all projects (async check in builder)
+              // Redirect will be handled in the ReportsScreen itself
+              return null;
+            },
+            builder: (context, state) => const ReportsScreen(),
+          ),
+          GoRoute(
+            path: AppRoutes.notifications,
+            name: 'notifications',
+            builder: (context, state) => const NotificationsScreen(),
           ),
         ],
       ),

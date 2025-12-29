@@ -17,6 +17,8 @@ class ProjectModel {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? imageUrl;
+  // Director permissions: Map<directorUserId, {canDeleteExpenses: bool, canDeleteMembers: bool}>
+  final Map<String, DirectorPermissions> directorPermissions;
 
   const ProjectModel({
     required this.id,
@@ -33,6 +35,7 @@ class ProjectModel {
     required this.createdAt,
     required this.updatedAt,
     this.imageUrl,
+    this.directorPermissions = const {},
   });
 
   /// Get remaining budget
@@ -49,6 +52,63 @@ class ProjectModel {
 
   /// Get total member count (including admin)
   int get memberCount => members.length + 1;
+  
+  /// Check if a user is the admin of this project
+  bool isUserAdmin(String userId) => adminId == userId;
+  
+  /// Check if a user is a director of this project
+  bool isUserDirector(String userId) {
+    return members.any((m) => m.userId == userId && m.isDirector);
+  }
+  
+  /// Check if a user is a labour of this project
+  bool isUserLabour(String userId) {
+    return members.any((m) => m.userId == userId && m.isLabour);
+  }
+  
+  /// Check if a user has admin-like control (admin or director)
+  bool hasAdminControl(String userId) {
+    return isUserAdmin(userId) || isUserDirector(userId);
+  }
+  
+  /// Check if a user can see full project details (admin or director)
+  bool canUserSeeDetails(String userId) {
+    return isUserAdmin(userId) || isUserDirector(userId);
+  }
+  
+  /// Check if a user can delete expenses (admin or director with permission)
+  bool canUserDeleteExpenses(String userId) {
+    if (isUserAdmin(userId)) return true;
+    if (isUserDirector(userId)) {
+      final permissions = directorPermissions[userId];
+      return permissions?.canDeleteExpenses ?? false;
+    }
+    return false;
+  }
+  
+  /// Check if a user can delete members (admin or director with permission)
+  bool canUserDeleteMembers(String userId) {
+    if (isUserAdmin(userId)) return true;
+    if (isUserDirector(userId)) {
+      final permissions = directorPermissions[userId];
+      return permissions?.canDeleteMembers ?? false;
+    }
+    return false;
+  }
+  
+  /// Check if a user is a member (any role)
+  bool isMember(String userId) {
+    return members.any((m) => m.userId == userId);
+  }
+  
+  /// Get a member by userId
+  ProjectMember? getMember(String userId) {
+    try {
+      return members.firstWhere((m) => m.userId == userId);
+    } catch (e) {
+      return null;
+    }
+  }
 
   /// Create ProjectModel from Firestore document
   factory ProjectModel.fromFirestore(DocumentSnapshot doc) {
@@ -64,6 +124,17 @@ class ProjectModel {
       adminName: data['adminName'] ?? '',
       members: (data['members'] as List<dynamic>?)
               ?.map((m) => ProjectMember.fromMap(m as Map<String, dynamic>))
+              .fold<Map<String, ProjectMember>>(
+                <String, ProjectMember>{},
+                (Map<String, ProjectMember> map, ProjectMember member) {
+                  // Deduplicate by userId - keep the first occurrence
+                  if (!map.containsKey(member.userId)) {
+                    map[member.userId] = member;
+                  }
+                  return map;
+                },
+              )
+              .values
               .toList() ??
           [],
       startDate: (data['startDate'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -71,6 +142,12 @@ class ProjectModel {
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       imageUrl: data['imageUrl'],
+      directorPermissions: (data['directorPermissions'] as Map<String, dynamic>?)
+              ?.map((key, value) => MapEntry(
+                    key,
+                    DirectorPermissions.fromMap(value as Map<String, dynamic>),
+                  )) ??
+          {},
     );
   }
 
@@ -87,6 +164,17 @@ class ProjectModel {
       adminName: map['adminName'] ?? '',
       members: (map['members'] as List<dynamic>?)
               ?.map((m) => ProjectMember.fromMap(m as Map<String, dynamic>))
+              .fold<Map<String, ProjectMember>>(
+                <String, ProjectMember>{},
+                (Map<String, ProjectMember> dedupeMap, ProjectMember member) {
+                  // Deduplicate by userId - keep the first occurrence
+                  if (!dedupeMap.containsKey(member.userId)) {
+                    dedupeMap[member.userId] = member;
+                  }
+                  return dedupeMap;
+                },
+              )
+              .values
               .toList() ??
           [],
       startDate: map['startDate'] is Timestamp
@@ -102,6 +190,12 @@ class ProjectModel {
           ? (map['updatedAt'] as Timestamp).toDate()
           : DateTime.tryParse(map['updatedAt'] ?? '') ?? DateTime.now(),
       imageUrl: map['imageUrl'],
+      directorPermissions: (map['directorPermissions'] as Map<String, dynamic>?)
+              ?.map((key, value) => MapEntry(
+                    key,
+                    DirectorPermissions.fromMap(value as Map<String, dynamic>),
+                  )) ??
+          {},
     );
   }
 
@@ -121,6 +215,9 @@ class ProjectModel {
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
       'imageUrl': imageUrl,
+      'directorPermissions': directorPermissions.map(
+        (key, value) => MapEntry(key, value.toMap()),
+      ),
     };
   }
 
@@ -140,6 +237,7 @@ class ProjectModel {
     DateTime? createdAt,
     DateTime? updatedAt,
     String? imageUrl,
+    Map<String, DirectorPermissions>? directorPermissions,
   }) {
     return ProjectModel(
       id: id ?? this.id,
@@ -156,6 +254,7 @@ class ProjectModel {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       imageUrl: imageUrl ?? this.imageUrl,
+      directorPermissions: directorPermissions ?? this.directorPermissions,
     );
   }
 
@@ -182,7 +281,7 @@ class ProjectMember {
   final String name;
   final String email;
   final String? photoUrl;
-  final String role;
+  final String role; // 'director' or 'labour'
   final DateTime joinedAt;
 
   const ProjectMember({
@@ -191,9 +290,21 @@ class ProjectMember {
     required this.name,
     required this.email,
     this.photoUrl,
-    this.role = UserRoles.stakeholder,
+    this.role = ProjectMemberRoles.labour,
     required this.joinedAt,
   });
+
+  /// Check if member is a director (has admin-like control)
+  bool get isDirector => role == ProjectMemberRoles.director;
+  
+  /// Check if member is labour (can only add expenses)
+  bool get isLabour => role == ProjectMemberRoles.labour;
+  
+  /// Check if member can see project details (admin and directors can)
+  bool get canSeeProjectDetails => isDirector;
+  
+  /// Check if member can manage expenses (approve/reject)
+  bool get canManageExpenses => isDirector;
 
   factory ProjectMember.fromMap(Map<String, dynamic> map) {
     return ProjectMember(
@@ -202,7 +313,7 @@ class ProjectMember {
       name: map['name'] ?? '',
       email: map['email'] ?? '',
       photoUrl: map['photoUrl'],
-      role: map['role'] ?? UserRoles.stakeholder,
+      role: map['role'] ?? ProjectMemberRoles.labour,
       joinedAt: map['joinedAt'] is Timestamp
           ? (map['joinedAt'] as Timestamp).toDate()
           : DateTime.tryParse(map['joinedAt'] ?? '') ?? DateTime.now(),
@@ -220,6 +331,26 @@ class ProjectMember {
       'joinedAt': Timestamp.fromDate(joinedAt),
     };
   }
+  
+  ProjectMember copyWith({
+    String? id,
+    String? userId,
+    String? name,
+    String? email,
+    String? photoUrl,
+    String? role,
+    DateTime? joinedAt,
+  }) {
+    return ProjectMember(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      photoUrl: photoUrl ?? this.photoUrl,
+      role: role ?? this.role,
+      joinedAt: joinedAt ?? this.joinedAt,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -230,5 +361,40 @@ class ProjectMember {
 
   @override
   int get hashCode => id.hashCode;
+}
+
+/// Director permissions model
+class DirectorPermissions {
+  final bool canDeleteExpenses;
+  final bool canDeleteMembers;
+
+  const DirectorPermissions({
+    this.canDeleteExpenses = false,
+    this.canDeleteMembers = false,
+  });
+
+  factory DirectorPermissions.fromMap(Map<String, dynamic> map) {
+    return DirectorPermissions(
+      canDeleteExpenses: map['canDeleteExpenses'] ?? false,
+      canDeleteMembers: map['canDeleteMembers'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'canDeleteExpenses': canDeleteExpenses,
+      'canDeleteMembers': canDeleteMembers,
+    };
+  }
+
+  DirectorPermissions copyWith({
+    bool? canDeleteExpenses,
+    bool? canDeleteMembers,
+  }) {
+    return DirectorPermissions(
+      canDeleteExpenses: canDeleteExpenses ?? this.canDeleteExpenses,
+      canDeleteMembers: canDeleteMembers ?? this.canDeleteMembers,
+    );
+  }
 }
 

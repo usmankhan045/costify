@@ -55,6 +55,7 @@ class ExpenseCategories {
   static const String utilities = 'Utilities';
   static const String permits = 'Permits & Fees';
   static const String contractors = 'Contractors';
+  static const String food = 'Food';
   static const String miscellaneous = 'Miscellaneous';
   
   static const List<String> all = [
@@ -65,6 +66,7 @@ class ExpenseCategories {
     utilities,
     permits,
     contractors,
+    food,
     miscellaneous,
   ];
   
@@ -76,6 +78,7 @@ class ExpenseCategories {
     utilities: '💡',
     permits: '📋',
     contractors: '🏗️',
+    food: '🍽️',
     miscellaneous: '📦',
   };
 }
@@ -101,7 +104,7 @@ class PaymentMethods {
   ];
 }
 
-/// User roles
+/// User roles (global user roles)
 class UserRoles {
   UserRoles._();
   
@@ -109,13 +112,76 @@ class UserRoles {
   static const String stakeholder = 'stakeholder';
 }
 
-/// Expense status
+/// Project member roles (roles within a specific project)
+class ProjectMemberRoles {
+  ProjectMemberRoles._();
+  
+  /// Director - has control like admin, can see all project details
+  static const String director = 'director';
+  
+  /// Labour - can only add expenses, cannot see full project details
+  static const String labour = 'labour';
+  
+  /// All available roles for project members
+  static const List<String> all = [director, labour];
+  
+  /// Role labels for display
+  static const Map<String, String> labels = {
+    director: 'Director',
+    labour: 'Labour',
+  };
+  
+  /// Role descriptions
+  static const Map<String, String> descriptions = {
+    director: 'Full access to project details and expense management',
+    labour: 'Can only add expenses, limited visibility of project details',
+  };
+}
+
+/// Expense status (approval status)
 class ExpenseStatus {
   ExpenseStatus._();
   
   static const String pending = 'pending';
   static const String approved = 'approved';
   static const String rejected = 'rejected';
+}
+
+/// Payment status for expenses
+class PaymentStatus {
+  PaymentStatus._();
+  
+  static const String paid = 'paid';
+  static const String credit = 'credit';  // Payment pending
+  static const String partial = 'partial'; // Partial payment made
+  
+  static const List<String> all = [paid, credit, partial];
+  
+  static const Map<String, String> labels = {
+    paid: 'Paid',
+    credit: 'Credit (Pending)',
+    partial: 'Partial Payment',
+  };
+  
+  static const Map<String, String> icons = {
+    paid: '✅',
+    credit: '⏳',
+    partial: '💳',
+  };
+}
+
+/// Notification types
+class NotificationType {
+  NotificationType._();
+  
+  static const String expenseCreated = 'expense_created';
+  static const String expenseApproved = 'expense_approved';
+  static const String expenseRejected = 'expense_rejected';
+  static const String paymentReceived = 'payment_received';
+  static const String projectInvite = 'project_invite';
+  static const String budgetWarning = 'budget_warning';
+  static const String expenseDeleted = 'expense_deleted';
+  static const String memberRemoved = 'member_removed';
 }
 
 /// Project status

@@ -10,6 +10,7 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/providers.dart';
 import '../../../router/app_router.dart';
 import '../../widgets/custom_button.dart';
+import '../notifications/notifications_screen.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -18,13 +19,15 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final authState = ref.watch(authNotifierProvider);
-    final projectsAsync = ref.watch(userProjectsProvider);
+    // Use stream provider for real-time updates
+    final projectsAsync = ref.watch(projectsStreamProvider);
 
     return Scaffold(
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
-            ref.invalidate(userProjectsProvider);
+            // Stream providers update automatically, but we can trigger a refresh
+            ref.invalidate(projectsStreamProvider);
           },
           child: CustomScrollView(
             slivers: [
@@ -49,12 +52,7 @@ class DashboardScreen extends ConsumerWidget {
                   ],
                 ),
                 actions: [
-                  IconButton(
-                    icon: const Icon(Icons.notifications_outlined),
-                    onPressed: () {
-                      // TODO: Navigate to notifications
-                    },
-                  ),
+                  _buildNotificationButton(context, ref),
                   Padding(
                     padding: const EdgeInsets.only(right: AppTheme.spaceSm),
                     child: CircleAvatar(
@@ -87,11 +85,8 @@ class DashboardScreen extends ConsumerWidget {
                   delegate: SliverChildListDelegate([
                     // Overview cards
                     projectsAsync.when(
-                      data: (projects) => _buildOverviewSection(
-                        context,
-                        ref,
-                        projects,
-                      ),
+                      data: (projects) =>
+                          _buildOverviewSection(context, ref, projects),
                       loading: () => _buildLoadingOverview(),
                       error: (_, __) => _buildErrorWidget(context),
                     ),
@@ -104,16 +99,13 @@ class DashboardScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: AppTheme.spaceSm),
                     projectsAsync.when(
-                      data: (projects) => _buildProjectsList(context, projects),
+                      data: (projects) => _buildProjectsList(context, ref, projects),
                       loading: () => _buildLoadingProjects(),
                       error: (_, __) => _buildErrorWidget(context),
                     ),
                     const SizedBox(height: AppTheme.spaceLg),
                     // Quick Actions
-                    _buildSectionHeader(
-                      context,
-                      title: 'Quick Actions',
-                    ),
+                    _buildSectionHeader(context, title: 'Quick Actions'),
                     const SizedBox(height: AppTheme.spaceSm),
                     _buildQuickActions(context, ref),
                     const SizedBox(height: AppTheme.spaceXl),
@@ -127,79 +119,155 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildNotificationButton(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authNotifierProvider);
+    final userId = authState.user?.id;
+
+    if (userId == null) {
+      return IconButton(
+        icon: const Icon(Icons.notifications_outlined),
+        onPressed: () => context.go(AppRoutes.notifications),
+      );
+    }
+
+    final unreadCountAsync = ref.watch(
+      unreadNotificationsCountProvider(userId),
+    );
+
+    return unreadCountAsync.when(
+      data: (count) {
+        return Stack(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.notifications_outlined),
+              onPressed: () => context.go(AppRoutes.notifications),
+            ),
+            if (count > 0)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: AppColors.error,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 16,
+                    minHeight: 16,
+                  ),
+                  child: Text(
+                    count > 9 ? '9+' : count.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+      loading: () => IconButton(
+        icon: const Icon(Icons.notifications_outlined),
+        onPressed: () => context.go(AppRoutes.notifications),
+      ),
+      error: (error, _) {
+        debugPrint('Notification count error: $error');
+        return IconButton(
+          icon: const Icon(Icons.notifications_outlined),
+          onPressed: () => context.go(AppRoutes.notifications),
+        );
+      },
+    );
+  }
+
   Widget _buildOverviewSection(
     BuildContext context,
     WidgetRef ref,
     List<ProjectModel> projects,
   ) {
     final theme = Theme.of(context);
-    final totalBudget = projects.fold(0.0, (sum, p) => sum + p.budget);
-    final totalSpent = projects.fold(0.0, (sum, p) => sum + p.totalSpent);
+    final authState = ref.watch(authNotifierProvider);
+    final userId = authState.user?.id ?? '';
+    
+    // Only calculate budget totals from projects where user can see details
+    final projectsWithAccess = projects.where((p) => p.canUserSeeDetails(userId)).toList();
+    final hasAnyProjectWithAccess = projectsWithAccess.isNotEmpty;
+    
+    final totalBudget = projectsWithAccess.fold(0.0, (sum, p) => sum + p.budget);
+    final totalSpent = projectsWithAccess.fold(0.0, (sum, p) => sum + p.totalSpent);
     final remaining = totalBudget - totalSpent;
 
     return Column(
       children: [
-        // Main budget card
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(AppTheme.spaceLg),
-          decoration: BoxDecoration(
-            gradient: AppColors.cardGradient,
-            borderRadius: BorderRadius.circular(AppTheme.radiusXl),
-            boxShadow: AppColors.mediumShadow,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                AppStrings.totalBudget,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.8),
-                ),
-              ),
-              const SizedBox(height: AppTheme.spaceXs),
-              Text(
-                Formatters.formatCurrency(totalBudget),
-                style: theme.textTheme.headlineMedium?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: AppTheme.spaceMd),
-              // Progress bar
-              ClipRRect(
-                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                child: LinearProgressIndicator(
-                  value: totalBudget > 0 ? (totalSpent / totalBudget).clamp(0.0, 1.0) : 0,
-                  minHeight: 8,
-                  backgroundColor: Colors.white.withValues(alpha: 0.3),
-                  valueColor: const AlwaysStoppedAnimation<Color>(
-                    AppColors.secondary,
+        // Main budget card (hidden if user has no projects with budget access)
+        if (hasAnyProjectWithAccess) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(AppTheme.spaceLg),
+            decoration: BoxDecoration(
+              gradient: AppColors.cardGradient,
+              borderRadius: BorderRadius.circular(AppTheme.radiusXl),
+              boxShadow: AppColors.mediumShadow,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  AppStrings.totalBudget,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.8),
                   ),
                 ),
-              ),
-              const SizedBox(height: AppTheme.spaceSm),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Spent: ${Formatters.formatCompactCurrency(totalSpent)}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.9),
+                const SizedBox(height: AppTheme.spaceXs),
+                Text(
+                  Formatters.formatCurrency(totalBudget),
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: AppTheme.spaceMd),
+                // Progress bar
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                  child: LinearProgressIndicator(
+                    value: totalBudget > 0
+                        ? (totalSpent / totalBudget).clamp(0.0, 1.0)
+                        : 0,
+                    minHeight: 8,
+                    backgroundColor: Colors.white.withValues(alpha: 0.3),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      AppColors.secondary,
                     ),
                   ),
-                  Text(
-                    'Remaining: ${Formatters.formatCompactCurrency(remaining)}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.9),
+                ),
+                const SizedBox(height: AppTheme.spaceSm),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Spent: ${Formatters.formatCompactCurrency(totalSpent)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    Text(
+                      'Remaining: ${Formatters.formatCompactCurrency(remaining)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: AppTheme.spaceMd),
+          const SizedBox(height: AppTheme.spaceMd),
+        ],
         // Stats row
         Row(
           children: [
@@ -307,7 +375,14 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildProjectsList(BuildContext context, List<ProjectModel> projects) {
+  Widget _buildProjectsList(
+    BuildContext context,
+    WidgetRef ref,
+    List<ProjectModel> projects,
+  ) {
+    final authState = ref.watch(authNotifierProvider);
+    final userId = authState.user?.id ?? '';
+
     if (projects.isEmpty) {
       return _buildEmptyState(
         context,
@@ -322,14 +397,20 @@ class DashboardScreen extends ConsumerWidget {
     return Column(
       children: projects
           .take(3)
-          .map((project) => _buildProjectCard(context, project))
+          .map((project) => _buildProjectCard(context, project, userId: userId))
           .toList(),
     );
   }
 
-  Widget _buildProjectCard(BuildContext context, ProjectModel project) {
+  Widget _buildProjectCard(
+    BuildContext context,
+    ProjectModel project, {
+    required String userId,
+  }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final canSeeDetails = project.canUserSeeDetails(userId);
+    final isLabour = project.isUserLabour(userId);
     final progress = project.budget > 0
         ? (project.totalSpent / project.budget).clamp(0.0, 1.0)
         : 0.0;
@@ -386,36 +467,70 @@ class DashboardScreen extends ConsumerWidget {
                 _buildStatusChip(context, project.status),
               ],
             ),
-            const SizedBox(height: AppTheme.spaceMd),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Budget: ${Formatters.formatCompactCurrency(project.budget)}',
-                  style: theme.textTheme.bodySmall,
-                ),
-                Text(
-                  '${(progress * 100).toInt()}% used',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: progress > 0.8
-                        ? AppColors.error
-                        : theme.colorScheme.onSurfaceVariant,
+            // Budget info (hidden from labour)
+            if (canSeeDetails) ...[
+              const SizedBox(height: AppTheme.spaceMd),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Budget: ${Formatters.formatCompactCurrency(project.budget)}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  Text(
+                    '${(progress * 100).toInt()}% used',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: progress > 0.8
+                          ? AppColors.error
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTheme.spaceXs),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(AppTheme.radiusXs),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor: theme.colorScheme.outlineVariant,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    progress > 0.8 ? AppColors.error : AppColors.primary,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: AppTheme.spaceXs),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(AppTheme.radiusXs),
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 6,
-                backgroundColor: theme.colorScheme.outlineVariant,
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  progress > 0.8 ? AppColors.error : AppColors.primary,
+              ),
+            ] else if (isLabour) ...[
+              const SizedBox(height: AppTheme.spaceMd),
+              Container(
+                padding: const EdgeInsets.all(AppTheme.spaceSm),
+                decoration: BoxDecoration(
+                  color: AppColors.info.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                  border: Border.all(
+                    color: AppColors.info.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: AppColors.info,
+                    ),
+                    const SizedBox(width: AppTheme.spaceSm),
+                    Expanded(
+                      child: Text(
+                        'You can add expenses for this project',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.info,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -459,6 +574,7 @@ class DashboardScreen extends ConsumerWidget {
 
   Widget _buildQuickActions(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authNotifierProvider);
+    final projectsAsync = ref.watch(userProjectsProvider);
 
     return Row(
       children: [
@@ -468,33 +584,170 @@ class DashboardScreen extends ConsumerWidget {
             icon: Icons.add_circle_outline,
             label: 'Add Expense',
             color: AppColors.secondary,
-            onTap: () => context.go(AppRoutes.expenses),
+            onTap: () => _handleAddExpense(context, ref, projectsAsync),
           ),
         ),
         const SizedBox(width: AppTheme.spaceMd),
-        if (authState.isAdmin)
-          Expanded(
-            child: _buildActionCard(
-              context,
-              icon: Icons.create_new_folder_outlined,
-              label: 'New Project',
-              color: AppColors.primary,
-              onTap: () => context.go('${AppRoutes.projects}/create'),
+        Expanded(
+          child: _buildActionCard(
+            context,
+            icon: authState.isAdmin
+                ? Icons.create_new_folder_outlined
+                : Icons.summarize_outlined,
+            label: authState.isAdmin ? 'New Project' : 'Reports',
+            color: authState.isAdmin ? AppColors.primary : AppColors.tertiary,
+            onTap: () {
+              if (authState.isAdmin) {
+                context.go('${AppRoutes.projects}/create');
+              } else {
+                // Check if user is labour in all projects
+                projectsAsync.whenData((projects) {
+                  if (projects.isNotEmpty) {
+                    final userId = authState.user?.id ?? '';
+                    // Check if user has at least one project where they're admin or director
+                    final hasAnyAdminOrDirectorProject = projects.any((p) => 
+                      p.isUserAdmin(userId) || p.isUserDirector(userId)
+                    );
+                    // Only block if they have NO admin/director projects (labour in all projects)
+                    if (!hasAnyAdminOrDirectorProject) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Reports are not available for your role'),
+                          backgroundColor: AppColors.warning,
+                        ),
+                      );
+                    } else {
+                      context.go(AppRoutes.reports);
+                    }
+                  } else {
+                    context.go(AppRoutes.reports);
+                  }
+                });
+              }
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _handleAddExpense(
+    BuildContext context,
+    WidgetRef ref,
+    AsyncValue<List<ProjectModel>> projectsAsync,
+  ) {
+    projectsAsync.when(
+      data: (projects) {
+        if (projects.isEmpty) {
+          // No projects, show message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No projects available. Create a project first.'),
+              backgroundColor: AppColors.warning,
             ),
-          )
-        else
-          Expanded(
-            child: _buildActionCard(
-              context,
-              icon: Icons.summarize_outlined,
-              label: 'Reports',
-              color: AppColors.tertiary,
-              onTap: () {
-                // TODO: Navigate to reports
+          );
+        } else if (projects.length == 1) {
+          // Single project, go directly to add expense
+          context.go('${AppRoutes.projects}/${projects.first.id}/expenses/add');
+        } else {
+          // Multiple projects, show selection dialog
+          _showProjectSelectionDialog(context, ref, projects);
+        }
+      },
+      loading: () {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Loading projects...')));
+      },
+      error: (_, __) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to load projects'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      },
+    );
+  }
+
+  void _showProjectSelectionDialog(
+    BuildContext context,
+    WidgetRef ref,
+    List<ProjectModel> projects,
+  ) {
+    final theme = Theme.of(context);
+    final authState = ref.watch(authNotifierProvider);
+    final userId = authState.user?.id ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppTheme.radiusXl),
+        ),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(AppTheme.spaceLg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Select Project',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: AppTheme.spaceXs),
+            Text(
+              'Choose a project to add expense to',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: AppTheme.spaceMd),
+            ...projects.map(
+              (project) {
+                final canSeeDetails = project.canUserSeeDetails(userId);
+                return ListTile(
+                  leading: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                    ),
+                    child: Icon(
+                      Icons.construction,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  title: Text(
+                    project.name,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    canSeeDetails
+                        ? 'Budget: ${Formatters.formatCompactCurrency(project.budget)}'
+                        : 'Add expenses for this project',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    context.go(
+                      '${AppRoutes.projects}/${project.id}/expenses/add',
+                    );
+                  },
+                );
               },
             ),
-          ),
-      ],
+            const SizedBox(height: AppTheme.spaceMd),
+          ],
+        ),
+      ),
     );
   }
 
@@ -516,10 +769,7 @@ class DashboardScreen extends ConsumerWidget {
           color: isDark ? AppColors.surfaceContainerDark : Colors.white,
           borderRadius: BorderRadius.circular(AppTheme.radiusLg),
           boxShadow: AppColors.softShadow,
-          border: Border.all(
-            color: color.withValues(alpha: 0.2),
-            width: 1,
-          ),
+          border: Border.all(color: color.withValues(alpha: 0.2), width: 1),
         ),
         child: Column(
           children: [
@@ -593,11 +843,7 @@ class DashboardScreen extends ConsumerWidget {
             ),
             if (buttonText != null && onPressed != null) ...[
               const SizedBox(height: AppTheme.spaceMd),
-              PrimaryButton(
-                text: buttonText,
-                onPressed: onPressed,
-                width: 200,
-              ),
+              PrimaryButton(text: buttonText, onPressed: onPressed, width: 200),
             ],
           ],
         ),
@@ -676,4 +922,3 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 }
-

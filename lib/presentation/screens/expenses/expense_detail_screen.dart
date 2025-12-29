@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,10 +15,7 @@ import '../../widgets/custom_text_field.dart';
 class ExpenseDetailScreen extends ConsumerWidget {
   final String expenseId;
 
-  const ExpenseDetailScreen({
-    super.key,
-    required this.expenseId,
-  });
+  const ExpenseDetailScreen({super.key, required this.expenseId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -35,8 +33,24 @@ class ExpenseDetailScreen extends ConsumerWidget {
         }
 
         final projectAsync = ref.watch(projectProvider(expense.projectId));
-        final isAdmin = projectAsync.when(
-          data: (project) => project?.adminId == authState.user?.id,
+        final hasAdminControl = projectAsync.when(
+          data: (project) {
+            if (project == null || authState.user == null) return false;
+            return project.hasAdminControl(authState.user!.id);
+          },
+          loading: () => false,
+          error: (_, __) => false,
+        );
+        
+        // Check if user can delete this expense
+        final canDeleteExpense = projectAsync.when(
+          data: (project) {
+            if (project == null || authState.user == null) return false;
+            final userId = authState.user!.id;
+            // Creator can delete pending expenses, or admin/director with permission can delete any
+            return (expense.createdBy == userId && expense.isPending) ||
+                   project.canUserDeleteExpenses(userId);
+          },
           loading: () => false,
           error: (_, __) => false,
         );
@@ -47,13 +61,15 @@ class ExpenseDetailScreen extends ConsumerWidget {
           appBar: AppBar(
             title: const Text('Expense Details'),
             actions: [
-              if (expense.createdBy == authState.user?.id &&
-                  expense.isPending)
+              if (canDeleteExpense)
                 PopupMenuButton<String>(
                   onSelected: (value) {
                     switch (value) {
                       case 'edit':
-                        // TODO: Navigate to edit
+                        // Only creator can edit pending expenses
+                        if (expense.createdBy == authState.user?.id && expense.isPending) {
+                          // TODO: Navigate to edit
+                        }
                         break;
                       case 'delete':
                         _showDeleteDialog(context, ref, expense.id);
@@ -61,24 +77,28 @@ class ExpenseDetailScreen extends ConsumerWidget {
                     }
                   },
                   itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          Icon(Icons.edit),
-                          SizedBox(width: 8),
-                          Text('Edit'),
-                        ],
+                    // Show edit only if creator and pending
+                    if (expense.createdBy == authState.user?.id && expense.isPending)
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit),
+                            SizedBox(width: 8),
+                            Text('Edit'),
+                          ],
+                        ),
                       ),
-                    ),
                     const PopupMenuItem(
                       value: 'delete',
                       child: Row(
                         children: [
                           Icon(Icons.delete, color: AppColors.error),
                           SizedBox(width: 8),
-                          Text('Delete',
-                              style: TextStyle(color: AppColors.error)),
+                          Text(
+                            'Delete',
+                            style: TextStyle(color: AppColors.error),
+                          ),
                         ],
                       ),
                     ),
@@ -97,7 +117,10 @@ class ExpenseDetailScreen extends ConsumerWidget {
                   padding: const EdgeInsets.all(AppTheme.spaceLg),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [categoryColor, categoryColor.withValues(alpha: 0.7)],
+                      colors: [
+                        categoryColor,
+                        categoryColor.withValues(alpha: 0.7),
+                      ],
                     ),
                     borderRadius: BorderRadius.circular(AppTheme.radiusXl),
                   ),
@@ -201,29 +224,8 @@ class ExpenseDetailScreen extends ConsumerWidget {
                     title: 'Receipt',
                     children: [
                       ClipRRect(
-                        borderRadius:
-                            BorderRadius.circular(AppTheme.radiusMd),
-                        child: Image.network(
-                          expense.receiptUrl!,
-                          fit: BoxFit.cover,
-                          loadingBuilder: (context, child, progress) {
-                            if (progress == null) return child;
-                            return Container(
-                              height: 200,
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              child: const Center(
-                                child: CircularProgressIndicator(),
-                              ),
-                            );
-                          },
-                          errorBuilder: (_, __, ___) => Container(
-                            height: 100,
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: const Center(
-                              child: Icon(Icons.broken_image, size: 48),
-                            ),
-                          ),
-                        ),
+                        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                        child: _buildReceiptImage(expense.receiptUrl!, theme),
                       ),
                     ],
                   ),
@@ -232,17 +234,22 @@ class ExpenseDetailScreen extends ConsumerWidget {
                   const SizedBox(height: AppTheme.spaceMd),
                   _buildDetailCard(
                     context,
-                    title: expense.isApproved ? 'Approval Details' : 'Rejection Details',
+                    title: expense.isApproved
+                        ? 'Approval Details'
+                        : 'Rejection Details',
                     children: [
                       _buildDetailRow(
                         context,
                         icon: expense.isApproved
                             ? Icons.check_circle
                             : Icons.cancel,
-                        label: expense.isApproved ? 'Approved By' : 'Rejected By',
+                        label: expense.isApproved
+                            ? 'Approved By'
+                            : 'Rejected By',
                         value: expense.approvedByName ?? 'Unknown',
-                        valueColor:
-                            expense.isApproved ? AppColors.success : AppColors.error,
+                        valueColor: expense.isApproved
+                            ? AppColors.success
+                            : AppColors.error,
                       ),
                       if (expense.approvedAt != null) ...[
                         const Divider(),
@@ -278,37 +285,44 @@ class ExpenseDetailScreen extends ConsumerWidget {
                   ),
                 ],
                 const SizedBox(height: AppTheme.spaceXl),
-                // Admin actions
-                if (isAdmin && expense.isPending) ...[
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SecondaryButton(
-                          text: 'Reject',
-                          icon: Icons.close,
-                          onPressed: () => _showRejectDialog(context, ref),
-                        ),
-                      ),
-                      const SizedBox(width: AppTheme.spaceMd),
-                      Expanded(
-                        child: PrimaryButton(
-                          text: 'Approve',
-                          icon: Icons.check,
-                          onPressed: () => _handleApprove(context, ref),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTheme.spaceLg),
-                ],
+                // Admin/Director actions (can approve/reject, but not if they created it)
+                Builder(
+                  builder: (context) {
+                    final currentUserId = authState.user?.id ?? '';
+                    final canActuallyApprove = hasAdminControl && 
+                        expense.isPending && 
+                        expense.createdBy != currentUserId;
+                    if (canActuallyApprove) {
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: SecondaryButton(
+                              text: 'Reject',
+                              icon: Icons.close,
+                              onPressed: () => _showRejectDialog(context, ref),
+                            ),
+                          ),
+                          const SizedBox(width: AppTheme.spaceMd),
+                          Expanded(
+                            child: PrimaryButton(
+                              text: 'Approve',
+                              icon: Icons.check,
+                              onPressed: () => _handleApprove(context, ref),
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
               ],
             ),
           ),
         );
       },
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (_, __) => Scaffold(
         appBar: AppBar(),
         body: const Center(child: Text('Failed to load expense')),
@@ -397,6 +411,52 @@ class ExpenseDetailScreen extends ConsumerWidget {
     );
   }
 
+  /// Build receipt image - handles both Base64 data URIs and network URLs
+  Widget _buildReceiptImage(String receiptUrl, ThemeData theme) {
+    // Check if it's a Base64 data URI
+    if (receiptUrl.startsWith('data:')) {
+      try {
+        // Extract Base64 string from data URI
+        final base64String = receiptUrl.split(',').last;
+        final bytes = base64Decode(base64String);
+        return Image.memory(
+          bytes,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            height: 100,
+            color: theme.colorScheme.surfaceContainerHighest,
+            child: const Center(child: Icon(Icons.broken_image, size: 48)),
+          ),
+        );
+      } catch (e) {
+        return Container(
+          height: 100,
+          color: theme.colorScheme.surfaceContainerHighest,
+          child: const Center(child: Icon(Icons.broken_image, size: 48)),
+        );
+      }
+    }
+
+    // Regular network URL
+    return Image.network(
+      receiptUrl,
+      fit: BoxFit.cover,
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          height: 200,
+          color: theme.colorScheme.surfaceContainerHighest,
+          child: const Center(child: CircularProgressIndicator()),
+        );
+      },
+      errorBuilder: (_, __, ___) => Container(
+        height: 100,
+        color: theme.colorScheme.surfaceContainerHighest,
+        child: const Center(child: Icon(Icons.broken_image, size: 48)),
+      ),
+    );
+  }
+
   Widget _buildDetailRow(
     BuildContext context, {
     required IconData icon,
@@ -410,11 +470,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(vertical: AppTheme.spaceSm),
       child: Row(
         children: [
-          Icon(
-            icon,
-            size: 20,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: AppTheme.spaceSm),
           Text(
             label,
@@ -422,12 +478,17 @@ class ExpenseDetailScreen extends ConsumerWidget {
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
-          const Spacer(),
-          Text(
-            value,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: valueColor,
+          const SizedBox(width: AppTheme.spaceSm),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: valueColor,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
             ),
           ),
         ],
@@ -556,7 +617,36 @@ class ExpenseDetailScreen extends ConsumerWidget {
     }
   }
 
-  void _showDeleteDialog(BuildContext context, WidgetRef ref, String id) {
+  void _showDeleteDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String id,
+  ) {
+    final authState = ref.read(authNotifierProvider);
+    final expenseAsync = ref.read(expenseProvider(id));
+    final expense = expenseAsync.valueOrNull;
+    
+    if (expense == null || authState.user == null) return;
+
+    final projectAsync = ref.read(projectProvider(expense.projectId));
+    final project = projectAsync.valueOrNull;
+    final userId = authState.user!.id;
+    if (project == null) return;
+    
+    final isAdmin = project.isUserAdmin(userId);
+    final isDirector = project.isUserDirector(userId);
+    final canDelete = isAdmin || (isDirector && project.canUserDeleteExpenses(userId));
+
+    if (!canDelete) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You do not have permission to delete expenses'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -571,8 +661,26 @@ class ExpenseDetailScreen extends ConsumerWidget {
             onPressed: () async {
               Navigator.pop(context);
               try {
-                await ref.read(expenseRepositoryProvider).deleteExpense(id);
+                await ref.read(expenseRepositoryProvider).deleteExpense(
+                      expenseId: id,
+                      deletedBy: userId,
+                      deletedByName: authState.user!.name,
+                      isDirector: isDirector && !isAdmin,
+                    );
+                ref.invalidate(expenseProvider(id));
+                ref.invalidate(projectExpensesProvider(expense.projectId));
+                ref.invalidate(projectProvider(expense.projectId));
                 if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        isDirector && !isAdmin
+                            ? 'Expense deleted. Admin has been notified.'
+                            : 'Expense deleted successfully',
+                      ),
+                      backgroundColor: AppColors.success,
+                    ),
+                  );
                   context.go(AppRoutes.expenses);
                 }
               } catch (e) {
@@ -597,4 +705,3 @@ class ExpenseDetailScreen extends ConsumerWidget {
     );
   }
 }
-

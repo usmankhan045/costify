@@ -20,11 +20,7 @@ void main() async {
   // Initialize services
   await _initializeServices();
 
-  runApp(
-    const ProviderScope(
-      child: CostifyApp(),
-    ),
-  );
+  runApp(const ProviderScope(child: CostifyApp()));
 }
 
 Future<void> _initializeServices() async {

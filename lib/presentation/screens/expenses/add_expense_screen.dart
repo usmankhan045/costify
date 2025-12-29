@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/constants/app_strings.dart';
+import '../../../core/services/notification_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
@@ -19,10 +21,7 @@ import '../../widgets/custom_text_field.dart';
 class AddExpenseScreen extends ConsumerStatefulWidget {
   final String projectId;
 
-  const AddExpenseScreen({
-    super.key,
-    required this.projectId,
-  });
+  const AddExpenseScreen({super.key, required this.projectId});
 
   @override
   ConsumerState<AddExpenseScreen> createState() => _AddExpenseScreenState();
@@ -33,9 +32,11 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
   final _titleController = TextEditingController();
   final _amountController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _paidAmountController = TextEditingController();
 
   String _selectedCategory = ExpenseCategories.materials;
   String _selectedPaymentMethod = PaymentMethods.cash;
+  String _selectedPaymentStatus = PaymentStatus.paid;
   DateTime _expenseDate = DateTime.now();
   File? _receiptImage;
   bool _isLoading = false;
@@ -47,6 +48,7 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
     _titleController.dispose();
     _amountController.dispose();
     _descriptionController.dispose();
+    _paidAmountController.dispose();
     super.dispose();
   }
 
@@ -91,9 +93,9 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
           children: [
             Text(
               AppStrings.uploadReceipt,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: AppTheme.spaceLg),
             Row(
@@ -179,29 +181,134 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // Validate paid amount for partial payment
+    if (_selectedPaymentStatus == PaymentStatus.partial) {
+      final paidText = _paidAmountController.text.replaceAll(',', '');
+      final totalAmount = double.parse(
+        _amountController.text.replaceAll(',', ''),
+      );
+      final paidAmount = double.tryParse(paidText) ?? 0;
+
+      if (paidAmount <= 0 || paidAmount >= totalAmount) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Paid amount must be between 0 and total amount'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
+    }
+
     setState(() => _isLoading = true);
 
     try {
       final authState = ref.read(authNotifierProvider);
       final expenseRepo = ref.read(expenseRepositoryProvider);
+      final projectAsync = ref.read(projectProvider(widget.projectId));
 
-      // TODO: Upload receipt image to Firebase Storage if present
+      final project = projectAsync.value;
+
+      // Only admin can auto-approve expenses - directors and labour must get admin approval
+      final isAdmin = project != null && 
+          project.isUserAdmin(authState.user!.id);
+
+      // Convert receipt image to Base64 and store directly in Firestore
       String? receiptUrl;
+      if (_receiptImage != null) {
+        try {
+          print('Converting receipt image to Base64...');
+          final bytes = await _receiptImage!.readAsBytes();
+          
+          // Check file size (limit to ~500KB for Firestore)
+          if (bytes.length > 500 * 1024) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Image is too large. Please use a smaller image (max 500KB).'),
+                  backgroundColor: AppColors.warning,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            }
+          } else {
+            // Determine mime type from file extension
+            final extension = _receiptImage!.path.toLowerCase();
+            String mimeType = 'image/jpeg';
+            if (extension.endsWith('.png')) {
+              mimeType = 'image/png';
+            } else if (extension.endsWith('.gif')) {
+              mimeType = 'image/gif';
+            } else if (extension.endsWith('.webp')) {
+              mimeType = 'image/webp';
+            }
+            
+            // Convert to Base64 data URI
+            final base64String = base64Encode(bytes);
+            receiptUrl = 'data:$mimeType;base64,$base64String';
+            print('Receipt converted to Base64 successfully (${bytes.length} bytes)');
+          }
+        } catch (e) {
+          print('Error converting image to Base64: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to process receipt image: $e'),
+                backgroundColor: AppColors.warning,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      } else {
+        print('No receipt image selected');
+      }
 
-      await expenseRepo.createExpense(
+      final amount = double.parse(_amountController.text.replaceAll(',', ''));
+      final paidAmount = _selectedPaymentStatus == PaymentStatus.partial
+          ? double.parse(_paidAmountController.text.replaceAll(',', ''))
+          : _selectedPaymentStatus == PaymentStatus.paid
+          ? amount
+          : 0.0;
+
+      final expense = await expenseRepo.createExpense(
         projectId: widget.projectId,
         title: _titleController.text.trim(),
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
-        amount: double.parse(_amountController.text.replaceAll(',', '')),
+        amount: amount,
         category: _selectedCategory,
         paymentMethod: _selectedPaymentMethod,
+        paymentStatus: _selectedPaymentStatus,
+        paidAmount: paidAmount,
         receiptUrl: receiptUrl,
         createdBy: authState.user!.id,
         createdByName: authState.user!.name,
         expenseDate: _expenseDate,
+        isAdmin: isAdmin, // Auto-approve if admin
       );
+
+      // Send notification to admin and all directors (except creator) if user is NOT admin
+      if (project != null && !isAdmin) {
+        // Get all director user IDs
+        final directorUserIds = project.members
+            .where((m) => m.isDirector)
+            .map((m) => m.userId)
+            .toList();
+
+        await NotificationService.instance.notifyAdminExpenseCreated(
+          adminId: project.adminId,
+          projectName: project.name,
+          expenseTitle: expense.title,
+          amount: expense.amount,
+          createdByName: authState.user!.name,
+          createdByUserId: authState.user!.id,
+          projectId: widget.projectId,
+          expenseId: expense.id,
+          directorUserIds: directorUserIds,
+        );
+      }
 
       ref.invalidate(projectExpensesProvider(widget.projectId));
       ref.invalidate(projectProvider(widget.projectId));
@@ -237,14 +344,16 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
     final projectAsync = ref.watch(projectProvider(widget.projectId));
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(AppStrings.addExpense),
-      ),
+      appBar: AppBar(title: const Text(AppStrings.addExpense)),
       body: projectAsync.when(
         data: (project) {
           if (project == null) {
             return const Center(child: Text('Project not found'));
           }
+
+          final authState = ref.watch(authNotifierProvider);
+          final userId = authState.user?.id ?? '';
+          final canSeeDetails = project.canUserSeeDetails(userId);
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(AppTheme.spaceMd),
@@ -257,15 +366,14 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                   Container(
                     padding: const EdgeInsets.all(AppTheme.spaceMd),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                      color: theme.colorScheme.primaryContainer.withValues(
+                        alpha: 0.3,
+                      ),
                       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.folder,
-                          color: theme.colorScheme.primary,
-                        ),
+                        Icon(Icons.folder, color: theme.colorScheme.primary),
                         const SizedBox(width: AppTheme.spaceSm),
                         Expanded(
                           child: Column(
@@ -277,12 +385,14 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              Text(
-                                'Remaining: ${Formatters.formatCurrency(project.remainingBudget)}',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
+                              // Only show remaining budget if user can see details (admin/director)
+                              if (canSeeDetails)
+                                Text(
+                                  'Remaining: ${Formatters.formatCurrency(project.remainingBudget)}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),
@@ -352,6 +462,9 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                       }
                     },
                   ),
+                  const SizedBox(height: AppTheme.spaceMd),
+                  // Payment status
+                  _buildPaymentStatusSection(context),
                   const SizedBox(height: AppTheme.spaceMd),
                   // Date
                   _buildDateField(context),
@@ -429,6 +542,167 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentStatusSection(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Payment Status',
+          style: theme.textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: AppTheme.spaceSm),
+        // Payment status chips
+        Wrap(
+          spacing: AppTheme.spaceSm,
+          children: PaymentStatus.all.map((status) {
+            final isSelected = _selectedPaymentStatus == status;
+            final color = status == PaymentStatus.paid
+                ? AppColors.success
+                : status == PaymentStatus.credit
+                ? AppColors.warning
+                : AppColors.tertiary;
+
+            return ChoiceChip(
+              label: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    PaymentStatus.icons[status] ?? '',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(PaymentStatus.labels[status] ?? status),
+                ],
+              ),
+              selected: isSelected,
+              selectedColor: color.withValues(alpha: 0.2),
+              checkmarkColor: color,
+              onSelected: (selected) {
+                if (selected) {
+                  setState(() {
+                    _selectedPaymentStatus = status;
+                    // Clear paid amount when switching
+                    if (status != PaymentStatus.partial) {
+                      _paidAmountController.clear();
+                    }
+                  });
+                }
+              },
+            );
+          }).toList(),
+        ),
+        // Show paid amount field for partial payment
+        if (_selectedPaymentStatus == PaymentStatus.partial) ...[
+          const SizedBox(height: AppTheme.spaceMd),
+          CustomTextField(
+            label: 'Paid Amount',
+            hint: 'Enter amount paid',
+            controller: _paidAmountController,
+            prefixIcon: const Icon(Icons.payments),
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              _ThousandsSeparatorFormatter(),
+            ],
+            validator: (value) {
+              if (_selectedPaymentStatus == PaymentStatus.partial) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter paid amount';
+                }
+                final paidAmount =
+                    double.tryParse(value.replaceAll(',', '')) ?? 0;
+                if (paidAmount <= 0) {
+                  return 'Amount must be greater than 0';
+                }
+              }
+              return null;
+            },
+            textInputAction: TextInputAction.next,
+          ),
+          if (_amountController.text.isNotEmpty &&
+              _paidAmountController.text.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: AppTheme.spaceXs),
+              child: Builder(
+                builder: (context) {
+                  final total =
+                      double.tryParse(
+                        _amountController.text.replaceAll(',', ''),
+                      ) ??
+                      0;
+                  final paid =
+                      double.tryParse(
+                        _paidAmountController.text.replaceAll(',', ''),
+                      ) ??
+                      0;
+                  final pending = total - paid;
+
+                  return Container(
+                    padding: const EdgeInsets.all(AppTheme.spaceSm),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.info_outline,
+                          size: 16,
+                          color: AppColors.warning,
+                        ),
+                        const SizedBox(width: AppTheme.spaceXs),
+                        Text(
+                          'Pending: ${Formatters.formatCurrency(pending > 0 ? pending : 0)}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppColors.warning,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+        // Info text for credit
+        if (_selectedPaymentStatus == PaymentStatus.credit)
+          Padding(
+            padding: const EdgeInsets.only(top: AppTheme.spaceSm),
+            child: Container(
+              padding: const EdgeInsets.all(AppTheme.spaceSm),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: AppColors.warning,
+                  ),
+                  const SizedBox(width: AppTheme.spaceXs),
+                  Expanded(
+                    child: Text(
+                      'Payment is pending. You can mark it as paid later.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.warning,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -580,10 +854,7 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
 
     return TextEditingValue(
       text: buffer.toString(),
-      selection: TextSelection.collapsed(
-        offset: buffer.length,
-      ),
+      selection: TextSelection.collapsed(offset: buffer.length),
     );
   }
 }
-

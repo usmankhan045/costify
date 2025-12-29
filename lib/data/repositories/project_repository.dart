@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/exceptions/app_exceptions.dart';
+import '../../core/services/notification_service.dart';
 import '../models/project_model.dart';
 import '../models/invitation_model.dart';
 
@@ -77,50 +78,123 @@ class ProjectRepository {
     }
   }
 
+  /// Stream of single project by ID (for real-time updates)
+  Stream<ProjectModel?> streamProjectById(String projectId) {
+    return _projectsCollection.doc(projectId).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      try {
+        return ProjectModel.fromFirestore(doc);
+      } catch (e) {
+        print('Error parsing project document: $e');
+        return null;
+      }
+    }).handleError((error) {
+      print('Error in project stream: $error');
+      return null;
+    });
+  }
+
   /// Get projects for user (admin or member)
   Future<List<ProjectModel>> getProjectsForUser(String userId) async {
     try {
-      // Get projects where user is admin
+      // Get user's projectIds from their user document
+      final userDoc = await _firestore.collection(AppConstants.usersCollection).doc(userId).get();
+      final projectIds = List<String>.from(userDoc.data()?['projectIds'] ?? []);
+      
+      if (projectIds.isEmpty) {
+        // Also check if user is admin of any project (fallback)
+        final adminQuery = await _projectsCollection
+            .where('adminId', isEqualTo: userId)
+            .orderBy('updatedAt', descending: true)
+            .get();
+        return adminQuery.docs.map((doc) => ProjectModel.fromFirestore(doc)).toList();
+      }
+      
+      // Firestore 'whereIn' has a limit of 30 items, so we need to batch
+      final projects = <ProjectModel>[];
+      final batches = <List<String>>[];
+      
+      for (var i = 0; i < projectIds.length; i += 10) {
+        batches.add(projectIds.sublist(
+          i,
+          i + 10 > projectIds.length ? projectIds.length : i + 10,
+        ));
+      }
+      
+      for (final batch in batches) {
+        final query = await _projectsCollection
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+        projects.addAll(query.docs.map((doc) => ProjectModel.fromFirestore(doc)));
+      }
+      
+      // Also get projects where user is admin but might not be in projectIds
       final adminQuery = await _projectsCollection
           .where('adminId', isEqualTo: userId)
-          .orderBy('updatedAt', descending: true)
           .get();
-
-      // Get projects where user is a member
-      final memberQuery = await _projectsCollection
-          .where('members', arrayContains: {'userId': userId})
-          .orderBy('updatedAt', descending: true)
-          .get();
-
-      final projects = <String, ProjectModel>{};
-
+      
       for (final doc in adminQuery.docs) {
-        projects[doc.id] = ProjectModel.fromFirestore(doc);
-      }
-
-      for (final doc in memberQuery.docs) {
-        if (!projects.containsKey(doc.id)) {
-          projects[doc.id] = ProjectModel.fromFirestore(doc);
+        if (!projects.any((p) => p.id == doc.id)) {
+          projects.add(ProjectModel.fromFirestore(doc));
         }
       }
 
-      final projectList = projects.values.toList();
-      projectList.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-
-      return projectList;
+      projects.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return projects;
     } catch (e) {
       throw DatabaseException.unknown(e);
     }
   }
 
-  /// Stream of projects for user
+  /// Stream of projects for user (admin, director, or member)
   Stream<List<ProjectModel>> streamProjectsForUser(String userId) {
-    return _projectsCollection
-        .where('adminId', isEqualTo: userId)
-        .orderBy('updatedAt', descending: true)
+    // Watch user document for projectIds changes, then fetch projects
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => ProjectModel.fromFirestore(doc)).toList());
+        .asyncMap((userDoc) async {
+          // Get projectIds from user document
+          final projectIds = List<String>.from(userDoc.data()?['projectIds'] ?? []);
+          
+          // Get all projects (admin + member projects)
+          final allProjects = <ProjectModel>[];
+          
+          // Get admin projects
+          final adminQuery = await _projectsCollection
+              .where('adminId', isEqualTo: userId)
+              .get();
+          allProjects.addAll(adminQuery.docs.map((doc) => ProjectModel.fromFirestore(doc)));
+          
+          // Get member projects (where user is in projectIds)
+          if (projectIds.isNotEmpty) {
+            // Firestore 'whereIn' has a limit of 30 items, so we need to batch
+            final batches = <List<String>>[];
+            for (var i = 0; i < projectIds.length; i += 10) {
+              batches.add(projectIds.sublist(
+                i,
+                i + 10 > projectIds.length ? projectIds.length : i + 10,
+              ));
+            }
+            
+            for (final batch in batches) {
+              final query = await _projectsCollection
+                  .where(FieldPath.documentId, whereIn: batch)
+                  .get();
+              allProjects.addAll(query.docs.map((doc) => ProjectModel.fromFirestore(doc)));
+            }
+          }
+          
+          // Deduplicate by project ID
+          final uniqueProjects = <String, ProjectModel>{};
+          for (final project in allProjects) {
+            uniqueProjects[project.id] = project;
+          }
+          
+          final result = uniqueProjects.values.toList();
+          result.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          return result;
+        });
   }
 
   /// Update project
@@ -232,9 +306,13 @@ class ProjectRepository {
     required String invitedBy,
     required String invitedByName,
     String? invitedEmail,
+    String memberRole = ProjectMemberRoles.labour,
     int expiryDays = 7,
   }) async {
     try {
+      print('🔵 [Invitation] Creating invitation for project: $projectId');
+      print('🔵 [Invitation] Role: $memberRole');
+      
       final docRef = _invitationsCollection.doc();
       final now = DateTime.now();
 
@@ -245,13 +323,30 @@ class ProjectRepository {
         invitedBy: invitedBy,
         invitedByName: invitedByName,
         invitedEmail: invitedEmail,
+        memberRole: memberRole,
         createdAt: now,
         expiresAt: now.add(Duration(days: expiryDays)),
       );
 
+      print('🔵 [Invitation] Invitation ID: ${invitation.id}');
+      print('🔵 [Invitation] Writing to Firestore...');
+      
       await docRef.set(invitation.toMap());
+      
+      print('✅ [Invitation] Invitation created successfully');
+      print('🔵 [Invitation] Shareable link: ${invitation.shareableLink}');
+      
       return invitation;
-    } catch (e) {
+    } on FirebaseException catch (e) {
+      print('❌ [Invitation] Firebase error: ${e.code} - ${e.message}');
+      throw DatabaseException(
+        message: 'Failed to create invitation: ${e.message}',
+        code: e.code,
+        originalError: e,
+      );
+    } catch (e, stackTrace) {
+      print('❌ [Invitation] Error creating invitation: $e');
+      print('❌ [Invitation] Stack trace: $stackTrace');
       throw DatabaseException.unknown(e);
     }
   }
@@ -287,17 +382,35 @@ class ProjectRepository {
           code: 'invitation-expired',
         );
       }
+      
+      // Check if user is already a member
+      final project = await getProjectById(invitation.projectId);
+      if (project != null) {
+        if (project.adminId == userId) {
+          throw DatabaseException(
+            message: 'You are already the admin of this project',
+            code: 'already-admin',
+          );
+        }
+        if (project.members.any((m) => m.userId == userId)) {
+          throw DatabaseException(
+            message: 'You are already a member of this project',
+            code: 'already-member',
+          );
+        }
+      }
 
       final now = DateTime.now();
       final memberId = _uuid.v4();
 
-      // Add user as project member
+      // Add user as project member with the role from the invitation
       final member = ProjectMember(
         id: memberId,
         userId: userId,
         name: userName,
         email: userEmail,
         photoUrl: userPhotoUrl,
+        role: invitation.memberRole, // Use role from invitation
         joinedAt: now,
       );
 
@@ -340,6 +453,9 @@ class ProjectRepository {
     required String projectId,
     required String memberId,
     required String userId,
+    required String removedBy,
+    required String removedByName,
+    bool isDirector = false,
   }) async {
     try {
       final project = await getProjectById(projectId);
@@ -362,6 +478,18 @@ class ProjectRepository {
         'projectIds': FieldValue.arrayRemove([projectId]),
         'updatedAt': Timestamp.now(),
       });
+
+      // If director removed member, notify admin
+      if (isDirector) {
+        await NotificationService.instance.notifyMemberRemovedByDirector(
+          adminId: project.adminId,
+          projectName: project.name,
+          memberName: memberToRemove.name,
+          removedByName: removedByName,
+          projectId: projectId,
+          memberId: memberId,
+        );
+      }
     } catch (e) {
       if (e is DatabaseException) rethrow;
       throw DatabaseException.unknown(e);
@@ -382,6 +510,39 @@ class ProjectRepository {
           .where((invitation) => invitation.isValid)
           .toList();
     } catch (e) {
+      throw DatabaseException.unknown(e);
+    }
+  }
+
+  /// Update director permissions
+  Future<void> updateDirectorPermissions({
+    required String projectId,
+    required String directorUserId,
+    required DirectorPermissions permissions,
+  }) async {
+    try {
+      final project = await getProjectById(projectId);
+      if (project == null) {
+        throw DatabaseException.notFound();
+      }
+
+      // Get current permissions map
+      final updatedPermissions = Map<String, DirectorPermissions>.from(
+        project.directorPermissions,
+      );
+      updatedPermissions[directorUserId] = permissions;
+
+      // Convert to map for Firestore
+      final permissionsMap = updatedPermissions.map(
+        (key, value) => MapEntry(key, value.toMap()),
+      );
+
+      await _projectsCollection.doc(projectId).update({
+        'directorPermissions': permissionsMap,
+        'updatedAt': Timestamp.now(),
+      });
+    } catch (e) {
+      if (e is DatabaseException) rethrow;
       throw DatabaseException.unknown(e);
     }
   }

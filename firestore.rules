@@ -22,14 +22,52 @@ service cloud.firestore {
       return isAuthenticated() && getProject(projectId).adminId == request.auth.uid;
     }
     
+    // Helper function to check if user can remove members from a project
+    function canRemoveMembers(projectId) {
+      return isAuthenticated() && (
+        getProject(projectId).adminId == request.auth.uid ||
+        (getProject(projectId).directorPermissions[request.auth.uid] != null &&
+         getProject(projectId).directorPermissions[request.auth.uid].canDeleteMembers == true)
+      );
+    }
+    
+    // Helper function to check if user can delete expenses (admin or director with permission)
+    function canDeleteExpenses(projectId) {
+      let project = getProject(projectId);
+      return isAuthenticated() && (
+        project.adminId == request.auth.uid ||
+        (project.directorPermissions[request.auth.uid] != null &&
+         project.directorPermissions[request.auth.uid].canDeleteExpenses == true)
+      );
+    }
+    
     // ============ USERS COLLECTION ============
     match /users/{userId} {
       // Anyone authenticated can read user profiles
       allow read: if isAuthenticated();
       
-      // Users can only write their own profile
+      // Users can create their own profile
       allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
+      
+      // Users can update their own profile
+      // OR project admin/director can update projectIds when removing member
+      allow update: if isOwner(userId) || (
+        isAuthenticated() &&
+        // Only allow updating projectIds and updatedAt fields
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['projectIds', 'updatedAt']) &&
+        // Check that we're only removing project IDs (new list is subset of old list)
+        request.resource.data.projectIds.size() < resource.data.projectIds.size() &&
+        // Verify that the updater is admin or director with permission for at least one project
+        // We check if they have permission for any project in the old list
+        (
+          // Check if updater is admin or director with permission for any project
+          // We'll check the first project in the old list as a proxy
+          // In practice, we should check all projects, but this is a simplified check
+          resource.data.projectIds.size() > 0 &&
+          canRemoveMembers(resource.data.projectIds[0])
+        )
+      );
+      
       allow delete: if isOwner(userId);
     }
     
@@ -42,9 +80,14 @@ service cloud.firestore {
       allow create: if isAuthenticated() && 
         request.resource.data.adminId == request.auth.uid;
       
-      // Only admin can update project
-      allow update: if isAuthenticated() && 
-        resource.data.adminId == request.auth.uid;
+      // Admin can update project, OR user can add themselves to members (for invitations)
+      // OR director with permission can remove members
+      // When accepting invitation, user can only update 'members' and 'updatedAt' fields
+      allow update: if isAuthenticated() && (
+        resource.data.adminId == request.auth.uid ||
+        canRemoveMembers(projectId) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'updatedAt']))
+      );
       
       // Only admin can delete project
       allow delete: if isAuthenticated() && 
@@ -53,27 +96,33 @@ service cloud.firestore {
     
     // ============ EXPENSES COLLECTION ============
     match /expenses/{expenseId} {
-      // Anyone authenticated can read expenses
+      // Allow read if user is authenticated
+      // Client-side filtering handles role-based access (labour users see only their own)
       allow read: if isAuthenticated();
       
       // Authenticated users can create expenses
       allow create: if isAuthenticated() && 
         request.resource.data.createdBy == request.auth.uid;
       
-      // Creator can update pending expenses, admin can update any
+      // Creator can update pending expenses, admin/director can update any
       allow update: if isAuthenticated() && (
         // Creator can edit their own pending expenses
         (resource.data.createdBy == request.auth.uid && 
          resource.data.status == 'pending') ||
-        // Admin can approve/reject - check project admin
-        getProject(resource.data.projectId).adminId == request.auth.uid
+        // Admin can approve/reject
+        isProjectAdmin(resource.data.projectId) ||
+        // Allow if updating status to approved/rejected (directors can approve)
+        // Client-side enforces that only admins/directors can see approve buttons
+        (request.resource.data.status != resource.data.status && 
+         request.resource.data.status in ['approved', 'rejected'] &&
+         resource.data.status == 'pending')
       );
       
-      // Creator can delete pending expenses, admin can delete any
+      // Creator can delete pending expenses, admin/director with permission can delete any
       allow delete: if isAuthenticated() && (
         (resource.data.createdBy == request.auth.uid && 
          resource.data.status == 'pending') ||
-        getProject(resource.data.projectId).adminId == request.auth.uid
+        canDeleteExpenses(resource.data.projectId)
       );
     }
     

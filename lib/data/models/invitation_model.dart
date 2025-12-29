@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../core/constants/app_constants.dart';
 
 /// Invitation model for project invitations
 class InvitationModel {
@@ -8,6 +9,7 @@ class InvitationModel {
   final String invitedBy; // Admin user ID
   final String invitedByName;
   final String? invitedEmail; // Optional - if inviting specific email
+  final String memberRole; // 'director' or 'labour' - role the invited user will have
   final String status; // 'pending', 'accepted', 'expired', 'cancelled'
   final DateTime createdAt;
   final DateTime expiresAt;
@@ -21,6 +23,7 @@ class InvitationModel {
     required this.invitedBy,
     required this.invitedByName,
     this.invitedEmail,
+    this.memberRole = ProjectMemberRoles.labour,
     this.status = InvitationStatus.pending,
     required this.createdAt,
     required this.expiresAt,
@@ -51,6 +54,7 @@ class InvitationModel {
       invitedBy: data['invitedBy'] ?? '',
       invitedByName: data['invitedByName'] ?? '',
       invitedEmail: data['invitedEmail'],
+      memberRole: data['memberRole'] ?? ProjectMemberRoles.labour,
       status: data['status'] ?? InvitationStatus.pending,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       expiresAt: (data['expiresAt'] as Timestamp?)?.toDate() ??
@@ -69,6 +73,7 @@ class InvitationModel {
       invitedBy: map['invitedBy'] ?? '',
       invitedByName: map['invitedByName'] ?? '',
       invitedEmail: map['invitedEmail'],
+      memberRole: map['memberRole'] ?? ProjectMemberRoles.labour,
       status: map['status'] ?? InvitationStatus.pending,
       createdAt: map['createdAt'] is Timestamp
           ? (map['createdAt'] as Timestamp).toDate()
@@ -92,6 +97,7 @@ class InvitationModel {
       'invitedBy': invitedBy,
       'invitedByName': invitedByName,
       'invitedEmail': invitedEmail,
+      'memberRole': memberRole,
       'status': status,
       'createdAt': Timestamp.fromDate(createdAt),
       'expiresAt': Timestamp.fromDate(expiresAt),
@@ -100,9 +106,16 @@ class InvitationModel {
     };
   }
 
-  /// Generate shareable link
+  /// Generate shareable link (deep link for mobile app)
   String get shareableLink {
-    return 'https://costify.app/invite/$id';
+    // Use custom URL scheme for deep linking
+    // Format: costify://invite/{invitationId}
+    return 'costify://invite/$id';
+  }
+  
+  /// Generate shareable link with fallback instructions
+  String get shareableLinkWithInstructions {
+    return 'costify://invite/$id\n\nOr open the Costify app and use invitation ID: $id';
   }
 
   /// Create a copy with modified fields
@@ -113,6 +126,7 @@ class InvitationModel {
     String? invitedBy,
     String? invitedByName,
     String? invitedEmail,
+    String? memberRole,
     String? status,
     DateTime? createdAt,
     DateTime? expiresAt,
@@ -126,6 +140,7 @@ class InvitationModel {
       invitedBy: invitedBy ?? this.invitedBy,
       invitedByName: invitedByName ?? this.invitedByName,
       invitedEmail: invitedEmail ?? this.invitedEmail,
+      memberRole: memberRole ?? this.memberRole,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
       expiresAt: expiresAt ?? this.expiresAt,
