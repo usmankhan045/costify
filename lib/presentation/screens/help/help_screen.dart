@@ -108,9 +108,9 @@ class HelpScreen extends ConsumerWidget {
             ),
             _buildFAQItem(
               context,
-              question: 'What is two-factor authentication (2FA)?',
+              question: 'Why do I need to verify my email?',
               answer:
-                  '2FA adds an extra security layer. When enabled, you\'ll need to enter a code sent to your email each time you sign in.',
+                  'Email verification ensures that you have access to the email address you used to sign up. You\'ll receive a verification link in your inbox after signing up. Click the link to verify your email before you can sign in.',
             ),
             const SizedBox(height: AppTheme.spaceLg),
             // Contact info

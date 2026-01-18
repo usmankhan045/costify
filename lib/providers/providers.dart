@@ -278,10 +278,10 @@ final filteredExpensesProvider = Provider.family<List<ExpenseModel>, String>((
             final userId = authState.user!.id;
             final isLabour = project.isUserLabour(userId);
 
-            // Labour users can only see their own expenses
+            // Labour users can only see their own expenses (including those added by admin for them)
             if (isLabour) {
               roleFilteredExpenses = expenses
-                  .where((e) => e.createdBy == userId)
+                  .where((e) => e.displayUserId == userId)
                   .toList();
             }
           }

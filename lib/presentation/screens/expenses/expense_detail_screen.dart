@@ -55,20 +55,32 @@ class ExpenseDetailScreen extends ConsumerWidget {
           error: (_, __) => false,
         );
 
+        // Check if user can edit this expense
+        final canEditExpense = projectAsync.when(
+          data: (project) {
+            if (project == null || authState.user == null) return false;
+            final userId = authState.user!.id;
+            // Creator can edit pending expenses, or admin/director with delete permission can edit any
+            return (expense.createdBy == userId && expense.isPending) ||
+                   project.canUserDeleteExpenses(userId);
+          },
+          loading: () => false,
+          error: (_, __) => false,
+        );
+
         final categoryColor = AppColors.getCategoryColor(expense.category);
 
         return Scaffold(
           appBar: AppBar(
             title: const Text('Expense Details'),
             actions: [
-              if (canDeleteExpense)
+              if (canEditExpense || canDeleteExpense)
                 PopupMenuButton<String>(
                   onSelected: (value) {
                     switch (value) {
                       case 'edit':
-                        // Only creator can edit pending expenses
-                        if (expense.createdBy == authState.user?.id && expense.isPending) {
-                          // TODO: Navigate to edit
+                        if (canEditExpense) {
+                          context.go('/projects/${expense.projectId}/expenses/${expense.id}/edit');
                         }
                         break;
                       case 'delete':
@@ -77,8 +89,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
                     }
                   },
                   itemBuilder: (context) => [
-                    // Show edit only if creator and pending
-                    if (expense.createdBy == authState.user?.id && expense.isPending)
+                    if (canEditExpense)
                       const PopupMenuItem(
                         value: 'edit',
                         child: Row(
@@ -89,19 +100,20 @@ class ExpenseDetailScreen extends ConsumerWidget {
                           ],
                         ),
                       ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete, color: AppColors.error),
-                          SizedBox(width: 8),
-                          Text(
-                            'Delete',
-                            style: TextStyle(color: AppColors.error),
-                          ),
-                        ],
+                    if (canDeleteExpense)
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete, color: AppColors.error),
+                            SizedBox(width: 8),
+                            Text(
+                              'Delete',
+                              style: TextStyle(color: AppColors.error),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
             ],
@@ -191,8 +203,10 @@ class ExpenseDetailScreen extends ConsumerWidget {
                     _buildDetailRow(
                       context,
                       icon: Icons.person,
-                      label: 'Created By',
-                      value: expense.createdByName,
+                      label: expense.addedByAdmin ? 'Expense For' : 'Created By',
+                      value: expense.addedByAdmin 
+                          ? '${expense.displayName} (added by ${expense.addedByAdminName})'
+                          : expense.displayName,
                     ),
                     const Divider(),
                     _buildDetailRow(

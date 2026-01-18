@@ -10,6 +10,47 @@ import '../../../data/models/expense_model.dart';
 import '../../../data/models/project_model.dart';
 import '../../../providers/providers.dart';
 
+/// Helper class to group expenses by date
+class ExpenseGroup {
+  final DateTime date;
+  final List<ExpenseModel> expenses;
+
+  ExpenseGroup({required this.date, required this.expenses});
+}
+
+/// Group expenses by date, with latest expenses on top within each date group
+List<ExpenseGroup> groupExpensesByDate(List<ExpenseModel> expenses) {
+  // Group by date (normalize to just date, ignoring time)
+  final Map<String, List<ExpenseModel>> grouped = {};
+  
+  for (final expense in expenses) {
+    // Normalize date to just year-month-day (ignore time)
+    final dateKey = DateTime(
+      expense.expenseDate.year,
+      expense.expenseDate.month,
+      expense.expenseDate.day,
+    );
+    final key = dateKey.toIso8601String().split('T')[0];
+    
+    grouped.putIfAbsent(key, () => []).add(expense);
+  }
+  
+  // Sort expenses within each group by createdAt (latest first)
+  for (final group in grouped.values) {
+    group.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+  
+  // Convert to ExpenseGroup list and sort by date (newest dates first)
+  final groups = grouped.entries.map((entry) {
+    final date = DateTime.parse(entry.key);
+    return ExpenseGroup(date: date, expenses: entry.value);
+  }).toList();
+  
+  groups.sort((a, b) => b.date.compareTo(a.date));
+  
+  return groups;
+}
+
 class CategoryExpensesScreen extends ConsumerStatefulWidget {
   final String category;
   final List<ProjectModel> projects;
@@ -65,8 +106,8 @@ class _CategoryExpensesScreenState
       );
     }
 
-    // Sort by date (newest first)
-    categoryExpenses.sort((a, b) => b.expenseDate.compareTo(a.expenseDate));
+    // Group expenses by date (latest first within each date)
+    final groupedExpenses = groupExpensesByDate(categoryExpenses);
 
     return Scaffold(
       appBar: AppBar(
@@ -149,14 +190,17 @@ class _CategoryExpensesScreenState
                     ],
                   ),
                 ),
-                // Expenses list
+                // Expenses list grouped by date
                 Expanded(
                   child: ListView.builder(
                     padding: const EdgeInsets.all(AppTheme.spaceMd),
-                    itemCount: categoryExpenses.length,
+                    itemCount: groupedExpenses.length,
                     itemBuilder: (context, index) {
-                      final expense = categoryExpenses[index];
-                      return _ExpenseCard(expense: expense);
+                      final group = groupedExpenses[index];
+                      return _ExpenseDateGroup(
+                        date: group.date,
+                        expenses: group.expenses,
+                      );
                     },
                   ),
                 ),
@@ -250,6 +294,66 @@ class _CategoryExpensesScreenState
   }
 }
 
+class _ExpenseDateGroup extends StatelessWidget {
+  final DateTime date;
+  final List<ExpenseModel> expenses;
+
+  const _ExpenseDateGroup({
+    required this.date,
+    required this.expenses,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Date header
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: AppTheme.spaceMd,
+            horizontal: AppTheme.spaceSm,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.calendar_today,
+                size: 16,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: AppTheme.spaceXs),
+              Text(
+                Formatters.formatDate(date),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: AppTheme.spaceSm),
+              Expanded(
+                child: Divider(
+                  color: theme.colorScheme.outline.withValues(alpha: 0.3),
+                ),
+              ),
+              const SizedBox(width: AppTheme.spaceSm),
+              Text(
+                '${expenses.length} expense${expenses.length == 1 ? '' : 's'}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Expenses for this date (latest first)
+        ...expenses.map((expense) => _ExpenseCard(expense: expense)),
+      ],
+    );
+  }
+}
+
 class _ExpenseCard extends StatelessWidget {
   final ExpenseModel expense;
 
@@ -314,7 +418,7 @@ class _ExpenseCard extends StatelessWidget {
                       const SizedBox(width: 8),
                       Flexible(
                         child: Text(
-                          'By ${expense.createdByName}',
+                          'By ${expense.displayName}${expense.addedByAdmin ? " (added by ${expense.addedByAdminName})" : ""}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),

@@ -31,6 +31,12 @@ class ExpenseModel {
   final String? deletedBy;
   final String? deletedByName;
   final DateTime? deletedAt;
+  // Admin-added expense fields
+  final bool addedByAdmin; // Whether admin added this expense on behalf of a user
+  final String? addedByAdminId; // Admin's user ID who added it
+  final String? addedByAdminName; // Admin's name who added it
+  final String? expenseForUserId; // User ID for whom expense is added (if different from createdBy)
+  final String? expenseForUserName; // User name for whom expense is added
 
   const ExpenseModel({
     required this.id,
@@ -57,6 +63,11 @@ class ExpenseModel {
     this.deletedBy,
     this.deletedByName,
     this.deletedAt,
+    this.addedByAdmin = false,
+    this.addedByAdminId,
+    this.addedByAdminName,
+    this.expenseForUserId,
+    this.expenseForUserName,
   });
 
   /// Check if expense is pending
@@ -82,6 +93,12 @@ class ExpenseModel {
 
   /// Check if partial payment
   bool get isPartialPayment => paymentStatus == PaymentStatus.partial;
+
+  /// Get the display name for the expense (user for whom expense is added, or creator)
+  String get displayName => expenseForUserName ?? createdByName;
+
+  /// Get the display user ID for the expense (user for whom expense is added, or creator)
+  String get displayUserId => expenseForUserId ?? createdBy;
 
   /// Create ExpenseModel from Firestore document
   factory ExpenseModel.fromFirestore(DocumentSnapshot doc) {
@@ -116,6 +133,11 @@ class ExpenseModel {
       deletedBy: data['deletedBy'],
       deletedByName: data['deletedByName'],
       deletedAt: (data['deletedAt'] as Timestamp?)?.toDate(),
+      addedByAdmin: data['addedByAdmin'] ?? false,
+      addedByAdminId: data['addedByAdminId'],
+      addedByAdminName: data['addedByAdminName'],
+      expenseForUserId: data['expenseForUserId'],
+      expenseForUserName: data['expenseForUserName'],
     );
   }
 
@@ -160,6 +182,11 @@ class ExpenseModel {
       deletedAt: map['deletedAt'] is Timestamp
           ? (map['deletedAt'] as Timestamp).toDate()
           : DateTime.tryParse(map['deletedAt'] ?? ''),
+      addedByAdmin: map['addedByAdmin'] ?? false,
+      addedByAdminId: map['addedByAdminId'],
+      addedByAdminName: map['addedByAdminName'],
+      expenseForUserId: map['expenseForUserId'],
+      expenseForUserName: map['expenseForUserName'],
     );
   }
 
@@ -189,6 +216,11 @@ class ExpenseModel {
       'deletedBy': deletedBy,
       'deletedByName': deletedByName,
       'deletedAt': deletedAt != null ? Timestamp.fromDate(deletedAt!) : null,
+      'addedByAdmin': addedByAdmin,
+      'addedByAdminId': addedByAdminId,
+      'addedByAdminName': addedByAdminName,
+      'expenseForUserId': expenseForUserId,
+      'expenseForUserName': expenseForUserName,
     };
   }
 
@@ -218,6 +250,11 @@ class ExpenseModel {
     String? deletedBy,
     String? deletedByName,
     DateTime? deletedAt,
+    bool? addedByAdmin,
+    String? addedByAdminId,
+    String? addedByAdminName,
+    String? expenseForUserId,
+    String? expenseForUserName,
   }) {
     return ExpenseModel(
       id: id ?? this.id,
@@ -244,6 +281,11 @@ class ExpenseModel {
       deletedBy: deletedBy ?? this.deletedBy,
       deletedByName: deletedByName ?? this.deletedByName,
       deletedAt: deletedAt ?? this.deletedAt,
+      addedByAdmin: addedByAdmin ?? this.addedByAdmin,
+      addedByAdminId: addedByAdminId ?? this.addedByAdminId,
+      addedByAdminName: addedByAdminName ?? this.addedByAdminName,
+      expenseForUserId: expenseForUserId ?? this.expenseForUserId,
+      expenseForUserName: expenseForUserName ?? this.expenseForUserName,
     );
   }
 

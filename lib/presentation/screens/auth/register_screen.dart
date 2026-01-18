@@ -62,25 +62,27 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               : _phoneController.text.trim(),
         );
 
-    setState(() => _isLoading = false);
-
     if (success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created! Please verify your email.'),
-          backgroundColor: AppColors.success,
-        ),
-      );
-      context.go(AppRoutes.dashboard);
-    } else if (mounted) {
-      final error = ref.read(authNotifierProvider).errorMessage;
-      if (error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error),
-            backgroundColor: AppColors.error,
-          ),
-        );
+      final email = _emailController.text.trim();
+      setState(() => _isLoading = false);
+      
+      print('✅ [Register] Signup successful, showing dialog for: $email');
+      
+      // Show dialog immediately - don't wait for post frame callback
+      // This ensures it shows before any router redirects
+      await _showVerificationDialog(email);
+    } else {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        final error = ref.read(authNotifierProvider).errorMessage;
+        if (error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error),
+              backgroundColor: AppColors.error,
+            ),
+          );
+        }
       }
     }
   }
@@ -107,9 +109,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         context.go(AppRoutes.dashboard);
       } else {
         final authState = ref.read(authNotifierProvider);
-        if (authState.requires2FA) {
-          context.go(AppRoutes.verify2FA);
-        } else if (authState.errorMessage != null) {
+        if (authState.errorMessage != null) {
           // Don't show error for cancelled sign-in
           final errorMessage = authState.errorMessage!;
           if (!errorMessage.contains('cancelled') && !errorMessage.contains('canceled')) {
@@ -333,6 +333,114 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showVerificationDialog(String email) async {
+    if (!mounted) return;
+    
+    print('✅ [Register] Showing verification dialog for: $email');
+    
+    final result = await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false, // Prevent back button from closing
+        child: AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.email_outlined, color: AppColors.primary),
+            const SizedBox(width: AppTheme.spaceSm),
+            const Text('Check Your Inbox'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'We\'ve sent a verification link to your email address.',
+              style: TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: AppTheme.spaceMd),
+            Container(
+              padding: const EdgeInsets.all(AppTheme.spaceMd),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.email, color: AppColors.primary, size: 20),
+                  const SizedBox(width: AppTheme.spaceSm),
+                  Expanded(
+                    child: Text(
+                      email,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppTheme.spaceMd),
+            const Text(
+              'Please check your inbox and click the verification link to activate your account. Then you can sign in.',
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: AppTheme.spaceSm),
+            Container(
+              padding: const EdgeInsets.all(AppTheme.spaceSm),
+              decoration: BoxDecoration(
+                color: AppColors.info.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, color: AppColors.info, size: 18),
+                  const SizedBox(width: AppTheme.spaceSm),
+                  Expanded(
+                    child: Text(
+                      'Don\'t see the email? Check your spam folder or click "Resend" on the next screen.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.info,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop('ok');
+            },
+            child: const Text('OK'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop('continue');
+            },
+            child: const Text('Continue'),
+          ),
+        ],
+        ),
+      ),
+    );
+    
+    // Navigate based on dialog result
+    if (mounted && result != null) {
+      if (result == 'continue') {
+        context.go('${AppRoutes.emailVerification}?email=${Uri.encodeComponent(email)}');
+      } else {
+        context.go(AppRoutes.login);
+      }
+    }
   }
 }
 

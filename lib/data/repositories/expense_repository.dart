@@ -21,6 +21,7 @@ class ExpenseRepository {
 
   /// Create a new expense
   /// If isAdmin is true, the expense is auto-approved
+  /// If expenseForUserId is provided, the expense is added on behalf of that user
   Future<ExpenseModel> createExpense({
     required String projectId,
     required String title,
@@ -35,6 +36,8 @@ class ExpenseRepository {
     required String createdByName,
     required DateTime expenseDate,
     bool isAdmin = false, // Auto-approve if admin creates expense
+    String? expenseForUserId, // User ID for whom expense is added (admin feature)
+    String? expenseForUserName, // User name for whom expense is added (admin feature)
   }) async {
     try {
       final docRef = _expensesCollection.doc();
@@ -49,6 +52,9 @@ class ExpenseRepository {
 
       // Auto-approve if admin is creating the expense
       final status = isAdmin ? ExpenseStatus.approved : ExpenseStatus.pending;
+
+      // Check if admin is adding expense on behalf of another user
+      final addedByAdmin = isAdmin && expenseForUserId != null && expenseForUserId != createdBy;
 
       final expense = ExpenseModel(
         id: docRef.id,
@@ -70,6 +76,11 @@ class ExpenseRepository {
         expenseDate: expenseDate,
         createdAt: now,
         updatedAt: now,
+        addedByAdmin: addedByAdmin,
+        addedByAdminId: addedByAdmin ? createdBy : null,
+        addedByAdminName: addedByAdmin ? createdByName : null,
+        expenseForUserId: expenseForUserId,
+        expenseForUserName: expenseForUserName,
       );
 
       await docRef.set(expense.toMap());
@@ -170,15 +181,33 @@ class ExpenseRepository {
         });
   }
 
-  /// Get expenses created by user
+  /// Get expenses created by user or added by admin for the user
   Future<List<ExpenseModel>> getExpensesByUser(String userId) async {
     try {
-      final query = await _expensesCollection
+      // Query expenses created by user
+      final createdByQuery = await _expensesCollection
           .where('createdBy', isEqualTo: userId)
           .get();
 
-      final expenses = query.docs
+      // Query expenses added by admin for this user
+      final addedForUserQuery = await _expensesCollection
+          .where('expenseForUserId', isEqualTo: userId)
+          .get();
+
+      // Combine both queries and deduplicate by expense ID
+      final allDocs = <String, DocumentSnapshot>{};
+      
+      for (final doc in createdByQuery.docs) {
+        allDocs[doc.id] = doc;
+      }
+      
+      for (final doc in addedForUserQuery.docs) {
+        allDocs[doc.id] = doc;
+      }
+
+      final expenses = allDocs.values
           .map((doc) => ExpenseModel.fromFirestore(doc))
+          .where((expense) => !expense.isDeleted) // Filter out deleted expenses
           .toList();
 
       // Sort client-side to avoid composite index requirement

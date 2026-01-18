@@ -14,6 +14,47 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/providers.dart';
 import '../../../router/app_router.dart';
 
+/// Helper class to group expenses by date
+class ExpenseGroup {
+  final DateTime date;
+  final List<ExpenseModel> expenses;
+
+  ExpenseGroup({required this.date, required this.expenses});
+}
+
+/// Group expenses by date, with latest expenses on top within each date group
+List<ExpenseGroup> groupExpensesByDate(List<ExpenseModel> expenses) {
+  // Group by date (normalize to just date, ignoring time)
+  final Map<String, List<ExpenseModel>> grouped = {};
+  
+  for (final expense in expenses) {
+    // Normalize date to just year-month-day (ignore time)
+    final dateKey = DateTime(
+      expense.expenseDate.year,
+      expense.expenseDate.month,
+      expense.expenseDate.day,
+    );
+    final key = dateKey.toIso8601String().split('T')[0];
+    
+    grouped.putIfAbsent(key, () => []).add(expense);
+  }
+  
+  // Sort expenses within each group by createdAt (latest first)
+  for (final group in grouped.values) {
+    group.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+  
+  // Convert to ExpenseGroup list and sort by date (newest dates first)
+  final groups = grouped.entries.map((entry) {
+    final date = DateTime.parse(entry.key);
+    return ExpenseGroup(date: date, expenses: entry.value);
+  }).toList();
+  
+  groups.sort((a, b) => b.date.compareTo(a.date));
+  
+  return groups;
+}
+
 class ProjectDetailScreen extends ConsumerWidget {
   final String projectId;
 
@@ -23,8 +64,8 @@ class ProjectDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final authState = ref.watch(authNotifierProvider);
-    // Use future provider for project (will be invalidated when expenses change for real-time updates)
-    final projectAsync = ref.watch(projectProvider(projectId));
+    // Use stream provider for project to get real-time updates when members are added
+    final projectAsync = ref.watch(projectStreamProvider(projectId));
     // Use stream provider for expenses (real-time updates)
     final expensesAsync = ref.watch(projectExpensesStreamProvider(projectId));
 
@@ -274,10 +315,10 @@ class ProjectDetailScreen extends ConsumerWidget {
                     const SizedBox(height: AppTheme.spaceSm),
                     expensesAsync.when(
                       data: (expenses) {
-                        // Labour can only see their own expenses
+                        // Labour can only see their own expenses (including those added by admin for them)
                         final visibleExpenses = isLabour && userId.isNotEmpty
                             ? expenses
-                                  .where((e) => e.createdBy == userId)
+                                  .where((e) => e.displayUserId == userId)
                                   .toList()
                             : expenses;
                         // Check if user can approve expenses (admin or director, but not the creator)
@@ -686,13 +727,46 @@ class ProjectDetailScreen extends ConsumerWidget {
       );
     }
 
+    // Group expenses by date
+    final groupedExpenses = groupExpensesByDate(expenses);
+    
     return Column(
-      children: expenses
-          .map(
-            (expense) =>
-                _buildExpenseCard(context, expense, canApproveExpenses),
-          )
-          .toList(),
+      children: groupedExpenses.expand((group) => [
+        // Date header
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: AppTheme.spaceSm,
+            horizontal: AppTheme.spaceXs,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.calendar_today,
+                size: 14,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: AppTheme.spaceXs),
+              Text(
+                Formatters.formatDate(group.date),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: AppTheme.spaceSm),
+              Expanded(
+                child: Divider(
+                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Expenses for this date (latest first)
+        ...group.expenses.map(
+          (expense) => _buildExpenseCard(context, expense, canApproveExpenses),
+        ),
+      ]).toList(),
     );
   }
 
@@ -1184,8 +1258,10 @@ class _ExpenseDetailBottomSheetState
                     _buildDetailRow(
                       context,
                       icon: Icons.person,
-                      label: 'Created By',
-                      value: expense.createdByName,
+                      label: expense.addedByAdmin ? 'Expense For' : 'Created By',
+                      value: expense.addedByAdmin 
+                          ? '${expense.displayName} (added by ${expense.addedByAdminName})'
+                          : expense.displayName,
                     ),
                     const Divider(),
                     _buildDetailRow(
@@ -1351,8 +1427,9 @@ class _ExpenseDetailBottomSheetState
                   },
                 ),
                 // Mark as paid button
+                // Allow admin/director or the person for whom expense was added (or creator) to mark as paid
                 if ((widget.canApproveExpenses ||
-                        expense.createdBy ==
+                        expense.displayUserId ==
                             ref.read(authNotifierProvider).user?.id) &&
                     expense.paymentStatus != PaymentStatus.paid) ...[
                   const SizedBox(height: AppTheme.spaceMd),

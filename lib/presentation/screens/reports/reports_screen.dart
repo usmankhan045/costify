@@ -17,14 +17,55 @@ import '../../../router/app_router.dart';
 import 'category_expenses_screen.dart';
 import 'member_expenses_screen.dart';
 
+/// Helper class to group expenses by date
+class ExpenseGroup {
+  final DateTime date;
+  final List<ExpenseModel> expenses;
+
+  ExpenseGroup({required this.date, required this.expenses});
+}
+
+/// Group expenses by date, with latest expenses on top within each date group
+List<ExpenseGroup> groupExpensesByDate(List<ExpenseModel> expenses) {
+  // Group by date (normalize to just date, ignoring time)
+  final Map<String, List<ExpenseModel>> grouped = {};
+  
+  for (final expense in expenses) {
+    // Normalize date to just year-month-day (ignore time)
+    final dateKey = DateTime(
+      expense.expenseDate.year,
+      expense.expenseDate.month,
+      expense.expenseDate.day,
+    );
+    final key = dateKey.toIso8601String().split('T')[0];
+    
+    grouped.putIfAbsent(key, () => []).add(expense);
+  }
+  
+  // Sort expenses within each group by createdAt (latest first)
+  for (final group in grouped.values) {
+    group.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+  
+  // Convert to ExpenseGroup list and sort by date (newest dates first)
+  final groups = grouped.entries.map((entry) {
+    final date = DateTime.parse(entry.key);
+    return ExpenseGroup(date: date, expenses: entry.value);
+  }).toList();
+  
+  groups.sort((a, b) => b.date.compareTo(a.date));
+  
+  return groups;
+}
+
 /// Report time periods
 enum ReportPeriod {
+  allTime,
   today,
   thisWeek,
   thisMonth,
   customDate,
   customRange,
-  allTime,
 }
 
 extension ReportPeriodExtension on ReportPeriod {
@@ -109,7 +150,7 @@ class ReportsScreen extends ConsumerStatefulWidget {
 }
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
-  ReportPeriod _selectedPeriod = ReportPeriod.thisMonth;
+  ReportPeriod _selectedPeriod = ReportPeriod.allTime;
   String? _selectedProjectId;
   DateTime? _customDate;
   DateTime? _customStartDate;
@@ -1306,10 +1347,11 @@ class _MemberBreakdownSection extends ConsumerWidget {
           });
 
           for (final expense in filteredExpenses) {
-            final userId = expense.createdBy;
+            // Use displayUserId (expenseForUserId if admin added, else createdBy)
+            final userId = expense.displayUserId;
             memberTotals[userId] = (memberTotals[userId] ?? 0) + expense.amount;
             memberCounts[userId] = (memberCounts[userId] ?? 0) + 1;
-            memberNames[userId] = expense.createdByName;
+            memberNames[userId] = expense.displayName;
             grandTotal += expense.amount;
           }
         },
@@ -1710,13 +1752,54 @@ class _ProjectExpensesSection extends ConsumerWidget {
                     ),
                   ),
                   const Divider(height: 1),
-                  // Expense items
-                  ...expenses.map(
-                    (expense) => _ExpenseReportItem(
-                      expense: expense,
-                      projectId: project.id,
+                  // Expense items grouped by date
+                  ...groupExpensesByDate(expenses).expand((group) => [
+                    // Date header
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: AppTheme.spaceSm,
+                        horizontal: AppTheme.spaceMd,
+                      ),
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_today,
+                            size: 16,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: AppTheme.spaceXs),
+                          Text(
+                            Formatters.formatDate(group.date),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(width: AppTheme.spaceSm),
+                          Expanded(
+                            child: Divider(
+                              color: theme.colorScheme.outline.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          const SizedBox(width: AppTheme.spaceSm),
+                          Text(
+                            '${group.expenses.length} expense${group.expenses.length == 1 ? '' : 's'}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                    // Expenses for this date (latest first)
+                    ...group.expenses.map(
+                      (expense) => _ExpenseReportItem(
+                        expense: expense,
+                        projectId: project.id,
+                      ),
+                    ),
+                  ]),
                 ],
               );
             },
@@ -1812,7 +1895,7 @@ class _ExpenseReportItem extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
-                    '${Formatters.formatDate(expense.expenseDate)} • ${expense.createdByName}',
+                    '${Formatters.formatDate(expense.expenseDate)} • ${expense.displayName}${expense.addedByAdmin ? " (added by ${expense.addedByAdminName})" : ""}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -2032,8 +2115,10 @@ class _ExpenseDetailSheet extends StatelessWidget {
                     _buildDetailRow(
                       context,
                       icon: Icons.person,
-                      label: 'Created By',
-                      value: expense.createdByName,
+                      label: expense.addedByAdmin ? 'Expense For' : 'Created By',
+                      value: expense.addedByAdmin 
+                          ? '${expense.displayName} (added by ${expense.addedByAdminName})'
+                          : expense.displayName,
                     ),
                     const Divider(),
                     _buildDetailRow(

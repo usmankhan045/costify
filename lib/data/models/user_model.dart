@@ -9,7 +9,6 @@ class UserModel {
   final String? photoUrl;
   final String? phoneNumber;
   final String role; // 'admin' or 'stakeholder'
-  final bool is2FAEnabled;
   final bool isEmailVerified;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -22,7 +21,6 @@ class UserModel {
     this.photoUrl,
     this.phoneNumber,
     this.role = UserRoles.stakeholder,
-    this.is2FAEnabled = false,
     this.isEmailVerified = false,
     required this.createdAt,
     required this.updatedAt,
@@ -45,7 +43,6 @@ class UserModel {
       photoUrl: data['photoUrl'],
       phoneNumber: data['phoneNumber'],
       role: data['role'] ?? UserRoles.stakeholder,
-      is2FAEnabled: data['is2FAEnabled'] ?? false,
       isEmailVerified: data['isEmailVerified'] ?? false,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -62,7 +59,6 @@ class UserModel {
       photoUrl: map['photoUrl'],
       phoneNumber: map['phoneNumber'],
       role: map['role'] ?? UserRoles.stakeholder,
-      is2FAEnabled: map['is2FAEnabled'] ?? false,
       isEmailVerified: map['isEmailVerified'] ?? false,
       createdAt: map['createdAt'] is Timestamp
           ? (map['createdAt'] as Timestamp).toDate()
@@ -82,7 +78,6 @@ class UserModel {
       'photoUrl': photoUrl,
       'phoneNumber': phoneNumber,
       'role': role,
-      'is2FAEnabled': is2FAEnabled,
       'isEmailVerified': isEmailVerified,
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
@@ -98,7 +93,6 @@ class UserModel {
     String? photoUrl,
     String? phoneNumber,
     String? role,
-    bool? is2FAEnabled,
     bool? isEmailVerified,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -111,7 +105,6 @@ class UserModel {
       photoUrl: photoUrl ?? this.photoUrl,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       role: role ?? this.role,
-      is2FAEnabled: is2FAEnabled ?? this.is2FAEnabled,
       isEmailVerified: isEmailVerified ?? this.isEmailVerified,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

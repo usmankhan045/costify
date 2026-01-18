@@ -87,6 +87,12 @@ class AuthException extends AppException {
         code: 'google-sign-in-failed',
       );
 
+  factory AuthException.googleSignInConfigError([dynamic error]) => AuthException(
+        message: 'Google Sign-In is not properly configured. Please contact support.',
+        code: 'google-sign-in-config-error',
+        originalError: error,
+      );
+
   factory AuthException.unknown([dynamic error]) => AuthException(
         message: 'An authentication error occurred',
         code: 'unknown',

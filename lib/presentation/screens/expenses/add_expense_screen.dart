@@ -12,6 +12,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/validators.dart';
+import '../../../data/models/expense_model.dart';
+import '../../../data/models/project_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/providers.dart';
 import '../../../router/app_router.dart';
@@ -20,8 +22,13 @@ import '../../widgets/custom_text_field.dart';
 
 class AddExpenseScreen extends ConsumerStatefulWidget {
   final String projectId;
+  final String? expenseId; // If provided, this is edit mode
 
-  const AddExpenseScreen({super.key, required this.projectId});
+  const AddExpenseScreen({
+    super.key,
+    required this.projectId,
+    this.expenseId,
+  });
 
   @override
   ConsumerState<AddExpenseScreen> createState() => _AddExpenseScreenState();
@@ -40,8 +47,56 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
   DateTime _expenseDate = DateTime.now();
   File? _receiptImage;
   bool _isLoading = false;
+  // Admin-only: selected user for whom expense is added
+  String? _selectedUserId;
+  String? _selectedUserName;
 
   final _imagePicker = ImagePicker();
+  bool _isEditMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEditMode = widget.expenseId != null;
+    if (_isEditMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadExpenseData();
+      });
+    }
+  }
+
+  Future<void> _loadExpenseData() async {
+    if (widget.expenseId == null) return;
+    
+    try {
+      final expenseRepo = ref.read(expenseRepositoryProvider);
+      final expense = await expenseRepo.getExpenseById(widget.expenseId!);
+      
+      if (expense != null && mounted) {
+        setState(() {
+          _titleController.text = expense.title;
+          _descriptionController.text = expense.description ?? '';
+          _amountController.text = expense.amount.toStringAsFixed(0);
+          _selectedCategory = expense.category;
+          _selectedPaymentMethod = expense.paymentMethod;
+          _selectedPaymentStatus = expense.paymentStatus;
+          _paidAmountController.text = expense.paidAmount.toStringAsFixed(0);
+          _expenseDate = expense.expenseDate;
+          _selectedUserId = expense.expenseForUserId;
+          _selectedUserName = expense.expenseForUserName;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load expense: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -271,56 +326,89 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
           ? amount
           : 0.0;
 
-      final expense = await expenseRepo.createExpense(
-        projectId: widget.projectId,
-        title: _titleController.text.trim(),
-        description: _descriptionController.text.trim().isEmpty
-            ? null
-            : _descriptionController.text.trim(),
-        amount: amount,
-        category: _selectedCategory,
-        paymentMethod: _selectedPaymentMethod,
-        paymentStatus: _selectedPaymentStatus,
-        paidAmount: paidAmount,
-        receiptUrl: receiptUrl,
-        createdBy: authState.user!.id,
-        createdByName: authState.user!.name,
-        expenseDate: _expenseDate,
-        isAdmin: isAdmin, // Auto-approve if admin
-      );
+      if (_isEditMode && widget.expenseId != null) {
+        // Update existing expense
+        await expenseRepo.updateExpense(
+          expenseId: widget.expenseId!,
+          title: _titleController.text.trim(),
+          description: _descriptionController.text.trim().isEmpty
+              ? null
+              : _descriptionController.text.trim(),
+          amount: amount,
+          category: _selectedCategory,
+          paymentMethod: _selectedPaymentMethod,
+          receiptUrl: receiptUrl,
+          expenseDate: _expenseDate,
+        );
 
-      // Send notification to admin and all directors (except creator) if user is NOT admin
-      if (project != null && !isAdmin) {
-        // Get all director user IDs
-        final directorUserIds = project.members
-            .where((m) => m.isDirector)
-            .map((m) => m.userId)
-            .toList();
+        ref.invalidate(projectExpensesProvider(widget.projectId));
+        ref.invalidate(projectProvider(widget.projectId));
+        ref.invalidate(expenseProvider(widget.expenseId!));
 
-        await NotificationService.instance.notifyAdminExpenseCreated(
-          adminId: project.adminId,
-          projectName: project.name,
-          expenseTitle: expense.title,
-          amount: expense.amount,
-          createdByName: authState.user!.name,
-          createdByUserId: authState.user!.id,
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Expense updated successfully!'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+          context.pop(); // Go back to expense detail
+        }
+      } else {
+        // Create new expense
+        final expense = await expenseRepo.createExpense(
           projectId: widget.projectId,
-          expenseId: expense.id,
-          directorUserIds: directorUserIds,
+          title: _titleController.text.trim(),
+          description: _descriptionController.text.trim().isEmpty
+              ? null
+              : _descriptionController.text.trim(),
+          amount: amount,
+          category: _selectedCategory,
+          paymentMethod: _selectedPaymentMethod,
+          paymentStatus: _selectedPaymentStatus,
+          paidAmount: paidAmount,
+          receiptUrl: receiptUrl,
+          createdBy: authState.user!.id,
+          createdByName: authState.user!.name,
+          expenseDate: _expenseDate,
+          isAdmin: isAdmin, // Auto-approve if admin
+          expenseForUserId: _selectedUserId, // User for whom expense is added (admin feature)
+          expenseForUserName: _selectedUserName, // User name for whom expense is added (admin feature)
         );
-      }
 
-      ref.invalidate(projectExpensesProvider(widget.projectId));
-      ref.invalidate(projectProvider(widget.projectId));
+        // Send notification to admin and all directors (except creator) if user is NOT admin
+        if (project != null && !isAdmin) {
+          // Get all director user IDs
+          final directorUserIds = project.members
+              .where((m) => m.isDirector)
+              .map((m) => m.userId)
+              .toList();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Expense added successfully!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        context.go('${AppRoutes.projects}/${widget.projectId}');
+          await NotificationService.instance.notifyAdminExpenseCreated(
+            adminId: project.adminId,
+            projectName: project.name,
+            expenseTitle: expense.title,
+            amount: expense.amount,
+            createdByName: authState.user!.name,
+            createdByUserId: authState.user!.id,
+            projectId: widget.projectId,
+            expenseId: expense.id,
+            directorUserIds: directorUserIds,
+          );
+        }
+
+        ref.invalidate(projectExpensesProvider(widget.projectId));
+        ref.invalidate(projectProvider(widget.projectId));
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Expense added successfully!'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+          context.go('${AppRoutes.projects}/${widget.projectId}');
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -341,10 +429,13 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final projectAsync = ref.watch(projectProvider(widget.projectId));
+    // Use stream provider for real-time updates when members are added
+    final projectAsync = ref.watch(projectStreamProvider(widget.projectId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text(AppStrings.addExpense)),
+      appBar: AppBar(
+        title: Text(_isEditMode ? 'Edit Expense' : AppStrings.addExpense),
+      ),
       body: projectAsync.when(
         data: (project) {
           if (project == null) {
@@ -400,6 +491,11 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                     ),
                   ),
                   const SizedBox(height: AppTheme.spaceLg),
+                  // Admin-only: User selector for adding expense on behalf of user (only when adding, not editing)
+                  if (!_isEditMode && project.isUserAdmin(userId))
+                    _buildUserSelector(context, project),
+                  if (!_isEditMode && project.isUserAdmin(userId))
+                    const SizedBox(height: AppTheme.spaceMd),
                   // Title
                   CustomTextField(
                     label: AppStrings.expenseTitle,
@@ -463,9 +559,9 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                     },
                   ),
                   const SizedBox(height: AppTheme.spaceMd),
-                  // Payment status
-                  _buildPaymentStatusSection(context),
-                  const SizedBox(height: AppTheme.spaceMd),
+                  // Payment status (only when adding, not editing)
+                  if (!_isEditMode) _buildPaymentStatusSection(context),
+                  if (!_isEditMode) const SizedBox(height: AppTheme.spaceMd),
                   // Date
                   _buildDateField(context),
                   const SizedBox(height: AppTheme.spaceMd),
@@ -484,7 +580,7 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                   const SizedBox(height: AppTheme.spaceXl),
                   // Submit button
                   PrimaryButton(
-                    text: AppStrings.addExpense,
+                    text: _isEditMode ? 'Update Expense' : AppStrings.addExpense,
                     onPressed: _handleSubmit,
                     isLoading: _isLoading,
                   ),
@@ -746,6 +842,105 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildUserSelector(BuildContext context, ProjectModel project) {
+    final theme = Theme.of(context);
+    
+    // Get all project members (excluding admin)
+    final members = project.members.toList();
+    
+    // Create a list with "Myself" option and all members
+    final userOptions = <Map<String, String>>[
+      {'id': '', 'name': 'Myself'},
+      ...members.map((m) => {'id': m.userId, 'name': m.name}),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Add Expense For',
+          style: theme.textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: AppTheme.spaceSm),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: AppTheme.spaceMd),
+          decoration: BoxDecoration(
+            color: theme.inputDecorationTheme.fillColor,
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedUserId ?? '',
+              isExpanded: true,
+              hint: const Text('Select user (optional)'),
+              items: userOptions.map((option) {
+                return DropdownMenuItem<String>(
+                  value: option['id'] ?? '',
+                  child: Row(
+                    children: [
+                      Icon(
+                        option['id']?.isEmpty ?? true
+                            ? Icons.person
+                            : Icons.person_outline,
+                        size: 18,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: AppTheme.spaceSm),
+                      Text(option['name'] ?? ''),
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: (value) {
+                setState(() {
+                  if (value == null || value.isEmpty) {
+                    _selectedUserId = null;
+                    _selectedUserName = null;
+                  } else {
+                    _selectedUserId = value;
+                    _selectedUserName = userOptions
+                        .firstWhere((opt) => opt['id'] == value)['name'];
+                  }
+                });
+              },
+            ),
+          ),
+        ),
+        if (_selectedUserId != null && _selectedUserId!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: AppTheme.spaceSm),
+            child: Container(
+              padding: const EdgeInsets.all(AppTheme.spaceSm),
+              decoration: BoxDecoration(
+                color: AppColors.tertiary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: AppColors.tertiary,
+                  ),
+                  const SizedBox(width: AppTheme.spaceXs),
+                  Expanded(
+                    child: Text(
+                      'Expense will be added to ${_selectedUserName}\'s history',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.tertiary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }

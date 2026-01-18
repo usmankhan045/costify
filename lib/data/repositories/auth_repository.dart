@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/exceptions/app_exceptions.dart';
@@ -53,10 +54,25 @@ class AuthRepository {
         throw AuthException.unknown();
       }
 
+      // Reload user to get latest email verification status
+      await credential.user!.reload();
+      
       // Get user data from Firestore
       final userModel = await getUserById(credential.user!.uid);
       if (userModel == null) {
         throw AuthException.userNotFound();
+      }
+
+      // Sync email verification status from Firebase Auth
+      final firebaseUser = _auth.currentUser;
+      if (firebaseUser != null && firebaseUser.emailVerified != userModel.isEmailVerified) {
+        // Update Firestore with latest verification status
+        await _usersCollection.doc(userModel.id).update({
+          'isEmailVerified': firebaseUser.emailVerified,
+          'updatedAt': Timestamp.now(),
+        });
+        // Return updated model
+        return userModel.copyWith(isEmailVerified: firebaseUser.emailVerified);
       }
 
       return userModel;
@@ -88,7 +104,28 @@ class AuthRepository {
       // Update display name
       await credential.user!.updateDisplayName(name);
 
-      // Create user model
+      // Send email verification
+      // Note: User must be signed in for sendEmailVerification to work
+      try {
+        await credential.user!.sendEmailVerification();
+        print('✅ [Auth] Email verification sent successfully to ${email.trim()}');
+      } on FirebaseAuthException catch (e) {
+        print('❌ [Auth] Firebase error sending email verification: ${e.code} - ${e.message}');
+        // If it's a configuration error, we should inform the user
+        if (e.code == 'missing-continue-uri' || e.code == 'invalid-continue-uri') {
+          print('⚠️ [Auth] Email verification action URL not configured in Firebase Console');
+          // Don't throw - account is created, user can resend later
+        } else {
+          // Re-throw other Firebase errors so they can be handled
+          throw _handleFirebaseAuthException(e);
+        }
+      } catch (e) {
+        print('⚠️ [Auth] Failed to send email verification: $e');
+        // Don't throw error - user account is created, they can resend later
+        // But log it for debugging
+      }
+
+      // Create user model (email not verified yet)
       final now = DateTime.now();
       final userModel = UserModel(
         id: credential.user!.uid,
@@ -96,6 +133,7 @@ class AuthRepository {
         name: name,
         phoneNumber: phoneNumber,
         role: UserRoles.stakeholder, // Default role
+        isEmailVerified: false, // Will be updated when user verifies email
         createdAt: now,
         updatedAt: now,
       );
@@ -103,8 +141,9 @@ class AuthRepository {
       // Save user to Firestore
       await _usersCollection.doc(credential.user!.uid).set(userModel.toMap());
 
-      // Send email verification
-      await credential.user!.sendEmailVerification();
+      // IMPORTANT: Don't sign out here - let the auth provider handle it
+      // The provider will sign out after signup to prevent auto-login
+      // This ensures users must verify email before accessing the app
 
       return userModel;
     } on FirebaseAuthException catch (e) {
@@ -134,7 +173,49 @@ class AuthRepository {
       }
       
       print('🔵 [Google Sign-In] Requesting Google sign-in...');
-      final googleUser = await _googleSignIn.signIn();
+      GoogleSignInAccount? googleUser;
+      try {
+        googleUser = await _googleSignIn.signIn();
+      } on PlatformException catch (e) {
+        print('🔴 [Google Sign-In] PlatformException: ${e.code} - ${e.message}');
+        print('🔴 [Google Sign-In] Details: ${e.details}');
+        
+        // Check for specific error codes
+        if (e.code == 'sign_in_failed') {
+          // Parse the error details to get the API exception code
+          final details = e.details?.toString() ?? '';
+          if (details.contains('ApiException: 10')) {
+            // Error code 10 = DEVELOPER_ERROR
+            print('❌ [Google Sign-In] DEVELOPER_ERROR (10): SHA-1 fingerprint or OAuth client ID not configured correctly');
+            throw AuthException(
+              message: 'Google Sign-In configuration error. Please contact support or check your app configuration.',
+              code: 'google-sign-in-config-error',
+              originalError: e,
+            );
+          } else if (details.contains('ApiException: 12500')) {
+            // Error code 12500 = SIGN_IN_CANCELLED
+            print('🔵 [Google Sign-In] Sign-in was cancelled by user');
+            throw AuthException.googleSignInCancelled();
+          } else if (details.contains('ApiException: 7')) {
+            // Error code 7 = NETWORK_ERROR
+            print('❌ [Google Sign-In] Network error');
+            throw AuthException(
+              message: 'Network error. Please check your internet connection and try again.',
+              code: 'google-sign-in-network-error',
+              originalError: e,
+            );
+          }
+        }
+        
+        // Generic PlatformException
+        print('❌ [Google Sign-In] PlatformException: ${e.code}');
+        throw AuthException(
+          message: 'Google Sign-In failed. Please try again.',
+          code: 'google-sign-in-platform-error',
+          originalError: e,
+        );
+      }
+      
       if (googleUser == null) {
         print('🔵 [Google Sign-In] User cancelled the sign-in');
         // User cancelled the sign-in, throw specific exception
@@ -319,15 +400,44 @@ class AuthRepository {
         await _googleSignIn.signOut();
       } catch (_) {}
       throw AuthException.googleSignInFailed();
+    } on PlatformException catch (e) {
+      // Handle PlatformException that wasn't caught earlier
+      print('🔴 [Google Sign-In] PlatformException in catch-all: ${e.code} - ${e.message}');
+      print('🔴 [Google Sign-In] Details: ${e.details}');
+      
+      // Don't sign out on configuration errors - it's not the user's fault
+      if (e.code == 'sign_in_failed' && (e.details?.toString().contains('ApiException: 10') ?? false)) {
+        throw AuthException(
+          message: 'Google Sign-In configuration error. Please contact support.',
+          code: 'google-sign-in-config-error',
+          originalError: e,
+        );
+      }
+      
+      // For other platform errors, don't sign out - let the user retry
+      throw AuthException(
+        message: 'Google Sign-In failed. Please try again.',
+        code: 'google-sign-in-platform-error',
+        originalError: e,
+      );
     } catch (e, stackTrace) {
       // Catch all other errors
       print('🔴 [Google Sign-In] Unexpected error: $e');
       print('🔴 [Google Sign-In] Error type: ${e.runtimeType}');
       print('🔴 [Google Sign-In] Stack trace: $stackTrace');
-      try {
-        await _auth.signOut();
-        await _googleSignIn.signOut();
-      } catch (_) {}
+      
+      // Only sign out if it's not an AuthException (which we've already handled)
+      if (e is! AuthException) {
+        try {
+          await _auth.signOut();
+          await _googleSignIn.signOut();
+        } catch (_) {}
+      }
+      
+      // Re-throw AuthException, otherwise throw generic error
+      if (e is AuthException) {
+        rethrow;
+      }
       throw AuthException.googleSignInFailed();
     }
   }
@@ -358,8 +468,22 @@ class AuthRepository {
   /// Send email verification
   Future<void> sendEmailVerification() async {
     try {
-      await _auth.currentUser?.sendEmailVerification();
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw AuthException.sessionExpired();
+      }
+      
+      // Reload user to ensure we have the latest data
+      await user.reload();
+      
+      // Send verification email
+      await user.sendEmailVerification();
+      print('✅ [Auth] Email verification sent successfully to ${user.email}');
+    } on FirebaseAuthException catch (e) {
+      print('❌ [Auth] Firebase error sending email verification: ${e.code} - ${e.message}');
+      throw _handleFirebaseAuthException(e);
     } catch (e) {
+      print('❌ [Auth] Error sending email verification: $e');
       throw AuthException.unknown(e);
     }
   }
@@ -377,7 +501,23 @@ class AuthRepository {
     try {
       final doc = await _usersCollection.doc(userId).get();
       if (!doc.exists) return null;
-      return UserModel.fromFirestore(doc);
+      
+      final userModel = UserModel.fromFirestore(doc);
+      
+      // Sync email verification status from Firebase Auth
+      final firebaseUser = _auth.currentUser;
+      if (firebaseUser != null && firebaseUser.uid == userId) {
+        if (firebaseUser.emailVerified != userModel.isEmailVerified) {
+          // Update Firestore with latest verification status
+          await _usersCollection.doc(userId).update({
+            'isEmailVerified': firebaseUser.emailVerified,
+            'updatedAt': Timestamp.now(),
+          });
+          return userModel.copyWith(isEmailVerified: firebaseUser.emailVerified);
+        }
+      }
+      
+      return userModel;
     } catch (e) {
       throw DatabaseException.unknown(e);
     }
@@ -449,17 +589,6 @@ class AuthRepository {
     }
   }
 
-  /// Enable/disable 2FA for user
-  Future<void> update2FAStatus(String userId, bool enabled) async {
-    try {
-      await _usersCollection.doc(userId).update({
-        'is2FAEnabled': enabled,
-        'updatedAt': Timestamp.now(),
-      });
-    } catch (e) {
-      throw DatabaseException.unknown(e);
-    }
-  }
 
   /// Change password
   Future<void> changePassword({
@@ -529,8 +658,25 @@ class AuthRepository {
         return AuthException.tooManyRequests();
       case 'invalid-credential':
         return AuthException.invalidCredentials();
+      case 'network-request-failed':
+        return AuthException(
+          message: 'Network error. Please check your internet connection.',
+          code: 'network-error',
+          originalError: e,
+        );
+      case 'missing-continue-uri':
+      case 'invalid-continue-uri':
+        return AuthException(
+          message: 'Email verification configuration error. Please contact support.',
+          code: 'email-config-error',
+          originalError: e,
+        );
       default:
-        return AuthException.unknown(e);
+        return AuthException(
+          message: e.message ?? 'An authentication error occurred',
+          code: e.code,
+          originalError: e,
+        );
     }
   }
 }

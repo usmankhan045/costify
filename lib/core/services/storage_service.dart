@@ -23,7 +23,6 @@ class StorageService {
   static const String keyLastSyncTime = 'last_sync_time';
   static const String keyAccessToken = 'access_token';
   static const String keyRefreshToken = 'refresh_token';
-  static const String key2FAEnabled = '2fa_enabled';
   
   /// Initialize storage
   Future<void> initialize() async {
@@ -152,12 +151,6 @@ class StorageService {
   /// Set notifications enabled status
   Future<void> setNotificationsEnabled(bool value) => 
       setBool(keyNotificationsEnabled, value);
-  
-  /// Get 2FA enabled status
-  bool get is2FAEnabled => getBool(key2FAEnabled) ?? false;
-  
-  /// Set 2FA enabled status
-  Future<void> set2FAEnabled(bool value) => setBool(key2FAEnabled, value);
   
   /// Save access token securely
   Future<void> saveAccessToken(String token) => 

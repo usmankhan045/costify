@@ -517,8 +517,10 @@ class PdfReportService {
             children: [
               pw.Expanded(
                 child: _buildExpenseDetailItem(
-                  'Created By',
-                  expense.createdByName,
+                  expense.addedByAdmin ? 'Expense For' : 'Created By',
+                  expense.addedByAdmin 
+                      ? '${expense.displayName} (added by ${expense.addedByAdminName})'
+                      : expense.displayName,
                   PdfColors.purple700,
                 ),
               ),

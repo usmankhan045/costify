@@ -117,9 +117,9 @@ class SettingsScreen extends ConsumerWidget {
               context,
               icon: Icons.security,
               title: AppStrings.security,
-              subtitle: authState.user?.is2FAEnabled == true
-                  ? '2FA Enabled'
-                  : '2FA Disabled',
+              subtitle: authState.user?.isEmailVerified == true
+                  ? 'Email Verified'
+                  : 'Email Not Verified',
               onTap: () => context.go('${AppRoutes.settings}/security'),
             ),
             const Divider(height: AppTheme.spaceLg),

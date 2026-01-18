@@ -18,13 +18,18 @@ service cloud.firestore {
     }
     
     // Helper function to check if user is project admin
+    // Returns false if project doesn't exist or can't be accessed
     function isProjectAdmin(projectId) {
-      return isAuthenticated() && getProject(projectId).adminId == request.auth.uid;
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/projects/$(projectId)) &&
+        getProject(projectId).adminId == request.auth.uid;
     }
     
     // Helper function to check if user can remove members from a project
+    // Returns false if project doesn't exist
     function canRemoveMembers(projectId) {
-      return isAuthenticated() && (
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/projects/$(projectId)) && (
         getProject(projectId).adminId == request.auth.uid ||
         (getProject(projectId).directorPermissions[request.auth.uid] != null &&
          getProject(projectId).directorPermissions[request.auth.uid].canDeleteMembers == true)
@@ -32,12 +37,31 @@ service cloud.firestore {
     }
     
     // Helper function to check if user can delete expenses (admin or director with permission)
+    // Returns false if project doesn't exist
     function canDeleteExpenses(projectId) {
-      let project = getProject(projectId);
-      return isAuthenticated() && (
-        project.adminId == request.auth.uid ||
-        (project.directorPermissions[request.auth.uid] != null &&
-         project.directorPermissions[request.auth.uid].canDeleteExpenses == true)
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/projects/$(projectId)) && (
+        getProject(projectId).adminId == request.auth.uid ||
+        (getProject(projectId).directorPermissions[request.auth.uid] != null &&
+         getProject(projectId).directorPermissions[request.auth.uid].canDeleteExpenses == true)
+      );
+    }
+    
+    // Helper function to check if updater is admin of any project in a list
+    // Used when removing project IDs during project deletion or member removal
+    // Checks up to 10 projects to cover most cases
+    function isAdminOfAnyProject(projectIds) {
+      return projectIds.size() > 0 && (
+        isProjectAdmin(projectIds[0]) ||
+        (projectIds.size() > 1 && isProjectAdmin(projectIds[1])) ||
+        (projectIds.size() > 2 && isProjectAdmin(projectIds[2])) ||
+        (projectIds.size() > 3 && isProjectAdmin(projectIds[3])) ||
+        (projectIds.size() > 4 && isProjectAdmin(projectIds[4])) ||
+        (projectIds.size() > 5 && isProjectAdmin(projectIds[5])) ||
+        (projectIds.size() > 6 && isProjectAdmin(projectIds[6])) ||
+        (projectIds.size() > 7 && isProjectAdmin(projectIds[7])) ||
+        (projectIds.size() > 8 && isProjectAdmin(projectIds[8])) ||
+        (projectIds.size() > 9 && isProjectAdmin(projectIds[9]))
       );
     }
     
@@ -50,22 +74,18 @@ service cloud.firestore {
       allow create: if isOwner(userId);
       
       // Users can update their own profile
-      // OR project admin/director can update projectIds when removing member
+      // OR project admin/director can update projectIds when removing member or deleting project
       allow update: if isOwner(userId) || (
         isAuthenticated() &&
         // Only allow updating projectIds and updatedAt fields
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['projectIds', 'updatedAt']) &&
         // Check that we're only removing project IDs (new list is subset of old list)
         request.resource.data.projectIds.size() < resource.data.projectIds.size() &&
-        // Verify that the updater is admin or director with permission for at least one project
-        // We check if they have permission for any project in the old list
-        (
-          // Check if updater is admin or director with permission for any project
-          // We'll check the first project in the old list as a proxy
-          // In practice, we should check all projects, but this is a simplified check
-          resource.data.projectIds.size() > 0 &&
-          canRemoveMembers(resource.data.projectIds[0])
-        )
+        // Verify that the updater is admin of at least one project in the old list
+        // This allows project admins to remove project IDs when deleting projects
+        // or when removing members from projects
+        resource.data.projectIds.size() > 0 &&
+        isAdminOfAnyProject(resource.data.projectIds)
       );
       
       allow delete: if isOwner(userId);
@@ -109,8 +129,10 @@ service cloud.firestore {
         // Creator can edit their own pending expenses
         (resource.data.createdBy == request.auth.uid && 
          resource.data.status == 'pending') ||
-        // Admin can approve/reject
+        // Admin can edit any expense
         isProjectAdmin(resource.data.projectId) ||
+        // Director with delete permission can edit any expense
+        canDeleteExpenses(resource.data.projectId) ||
         // Allow if updating status to approved/rejected (directors can approve)
         // Client-side enforces that only admins/directors can see approve buttons
         (request.resource.data.status != resource.data.status && 
@@ -119,10 +141,13 @@ service cloud.firestore {
       );
       
       // Creator can delete pending expenses, admin/director with permission can delete any
+      // Also allow admin to delete expenses when deleting project (checked via projectId)
       allow delete: if isAuthenticated() && (
         (resource.data.createdBy == request.auth.uid && 
          resource.data.status == 'pending') ||
-        canDeleteExpenses(resource.data.projectId)
+        canDeleteExpenses(resource.data.projectId) ||
+        // Allow admin to delete expenses when deleting project
+        isProjectAdmin(resource.data.projectId)
       );
     }
     
@@ -137,9 +162,12 @@ service cloud.firestore {
       // Anyone authenticated can accept (update) an invitation
       allow update: if isAuthenticated();
       
-      // Creator can delete invitations
-      allow delete: if isAuthenticated() && 
-        resource.data.invitedBy == request.auth.uid;
+      // Creator can delete invitations, or admin can delete when deleting project
+      allow delete: if isAuthenticated() && (
+        resource.data.invitedBy == request.auth.uid ||
+        // Allow admin to delete invitations when deleting project
+        isProjectAdmin(resource.data.projectId)
+      );
     }
     
     // ============ NOTIFICATIONS COLLECTION ============

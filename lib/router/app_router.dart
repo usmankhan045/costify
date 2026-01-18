@@ -5,7 +5,7 @@ import '../providers/auth_provider.dart';
 import '../presentation/screens/auth/login_screen.dart';
 import '../presentation/screens/auth/register_screen.dart';
 import '../presentation/screens/auth/forgot_password_screen.dart';
-import '../presentation/screens/auth/verify_2fa_screen.dart';
+import '../presentation/screens/auth/email_verification_screen.dart';
 import '../presentation/screens/dashboard/dashboard_screen.dart';
 import '../presentation/screens/dashboard/main_shell.dart';
 import '../presentation/screens/projects/projects_screen.dart';
@@ -34,7 +34,7 @@ class AppRoutes {
   static const String login = '/login';
   static const String register = '/register';
   static const String forgotPassword = '/forgot-password';
-  static const String verify2FA = '/verify-2fa';
+  static const String emailVerification = '/email-verification';
 
   // Invitation route
   static const String acceptInvitation = '/invite/:invitationId';
@@ -65,8 +65,8 @@ final routerProvider = Provider<GoRouter>((ref) {
     debugLogDiagnostics: true,
     refreshListenable: _RouterRefreshStream(ref),
     redirect: (context, state) {
+      final authStatus = authState.status;
       final isLoggedIn = authState.isAuthenticated;
-      final requires2FA = authState.requires2FA;
       final currentPath = state.matchedLocation;
 
       // Auth routes that don't require authentication
@@ -77,25 +77,31 @@ final routerProvider = Provider<GoRouter>((ref) {
         AppRoutes.splash,
       ];
       
-      // Routes that can be accessed without authentication (invitation links)
+      // Routes that can be accessed without authentication (invitation links, email verification)
       final isInvitationRoute = currentPath.startsWith('/invite/');
+      final isEmailVerificationRoute = currentPath == AppRoutes.emailVerification;
 
-      // If requires 2FA verification
-      if (requires2FA && currentPath != AppRoutes.verify2FA) {
-        return AppRoutes.verify2FA;
+      // If still initializing, allow splash screen or wait
+      if (authStatus == AuthStatus.initial || authStatus == AuthStatus.loading) {
+        // If on splash, allow it
+        if (currentPath == AppRoutes.splash) {
+          return null;
+        }
+        // Otherwise, redirect to splash to wait for initialization
+        return AppRoutes.splash;
       }
 
-      // Allow invitation routes - they handle auth internally
-      if (isInvitationRoute) {
+      // Allow invitation routes and email verification - they handle auth internally
+      if (isInvitationRoute || isEmailVerificationRoute) {
         return null;
       }
 
       // If not logged in and trying to access protected route
-      if (!isLoggedIn && !authRoutes.contains(currentPath) && currentPath != AppRoutes.verify2FA) {
+      if (!isLoggedIn && !authRoutes.contains(currentPath)) {
         return AppRoutes.login;
       }
 
-      // If logged in and trying to access auth routes
+      // If logged in and trying to access auth routes (except splash)
       if (isLoggedIn && authRoutes.contains(currentPath) && currentPath != AppRoutes.splash) {
         return AppRoutes.dashboard;
       }
@@ -127,9 +133,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ForgotPasswordScreen(),
       ),
       GoRoute(
-        path: AppRoutes.verify2FA,
-        name: 'verify2FA',
-        builder: (context, state) => const Verify2FAScreen(),
+        path: AppRoutes.emailVerification,
+        name: 'emailVerification',
+        builder: (context, state) {
+          final email = state.uri.queryParameters['email'] ?? '';
+          return EmailVerificationScreen(email: email);
+        },
       ),
 
       // Invitation acceptance route
@@ -183,6 +192,15 @@ final routerProvider = Provider<GoRouter>((ref) {
                     builder: (context, state) {
                       final projectId = state.pathParameters['id']!;
                       return AddExpenseScreen(projectId: projectId);
+                    },
+                  ),
+                  GoRoute(
+                    path: 'expenses/:expenseId/edit',
+                    name: 'editExpense',
+                    builder: (context, state) {
+                      final projectId = state.pathParameters['id']!;
+                      final expenseId = state.pathParameters['expenseId']!;
+                      return AddExpenseScreen(projectId: projectId, expenseId: expenseId);
                     },
                   ),
                   GoRoute(

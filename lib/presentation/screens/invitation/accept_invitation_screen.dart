@@ -104,8 +104,10 @@ class _AcceptInvitationScreenState
         userPhotoUrl: authState.user!.photoUrl,
       );
 
-      // Refresh projects list
+      // Refresh projects list and specific project to show new member immediately
       ref.invalidate(userProjectsProvider);
+      ref.invalidate(projectProvider(_invitation!.projectId));
+      ref.invalidate(projectsStreamProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -131,7 +133,6 @@ class _AcceptInvitationScreenState
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final authState = ref.watch(authNotifierProvider);
 
     return Scaffold(

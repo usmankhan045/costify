@@ -48,22 +48,29 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
 
-    // Wait for auth state to be determined (not initial), with timeout
+    // Wait for auth state to be determined (not initial or loading), with timeout
     int attempts = 0;
-    while (attempts < 20) {
+    const maxAttempts = 50; // 5 seconds total (50 * 100ms)
+
+    while (attempts < maxAttempts) {
       if (!mounted) return;
-      
+
       final authState = ref.read(authNotifierProvider);
-      
-      // If auth state is still initial, wait a bit more
-      if (authState.status == AuthStatus.initial) {
+
+      // If auth state is still initial or loading, wait a bit more
+      if (authState.status == AuthStatus.initial ||
+          authState.status == AuthStatus.loading) {
         await Future.delayed(const Duration(milliseconds: 100));
         attempts++;
         continue;
       }
-      
-      // Navigate based on auth state
+
+      // Auth state is determined, navigate based on it
       if (!mounted) return;
+      print(
+        '🔵 [Splash] Auth state determined: ${authState.status}, isAuthenticated: ${authState.isAuthenticated}',
+      );
+
       if (authState.isAuthenticated) {
         context.go(AppRoutes.dashboard);
       } else {
@@ -71,10 +78,20 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       }
       return;
     }
-    
-    // If still initial after waiting (4 seconds total), navigate to login as fallback
+
+    // If still initial/loading after waiting, check one more time
     if (mounted) {
-      context.go(AppRoutes.login);
+      final authState = ref.read(authNotifierProvider);
+      print(
+        '⚠️ [Splash] Timeout waiting for auth state. Current status: ${authState.status}',
+      );
+
+      // If we have an authenticated state, use it; otherwise go to login
+      if (authState.isAuthenticated) {
+        context.go(AppRoutes.dashboard);
+      } else {
+        context.go(AppRoutes.login);
+      }
     }
   }
 
